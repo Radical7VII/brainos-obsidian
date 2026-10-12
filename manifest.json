@@ -1,0 +1,12 @@
+{
+  "id": "brainos-graph",
+  "name": "BrainOS Graph",
+  "version": "0.1.0",
+  "minAppVersion": "1.5.0",
+  "description": "在 Obsidian vault 中使用 BrainOS 的原子图谱与快速捕捉工作流。",
+  "author": "BrainOS",
+  "isDesktopOnly": false,
+  "fundingUrl": "",
+  "authorUrl": "",
+  "repo": ""
+}
