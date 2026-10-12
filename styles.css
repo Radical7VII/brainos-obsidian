@@ -1,6 +1,14 @@
 .brainos-graph-view { position: relative; height: 100%; overflow: hidden; }
 .brainos-graph-toolbar { display: flex; gap: 6px; align-items: center; padding: 8px; border-bottom: 1px solid var(--background-modifier-border); }
 .brainos-graph-toolbar input { flex: 1; min-width: 80px; }
-.brainos-graph-canvas { display: block; width: 100%; height: calc(100% - 45px); cursor: grab; }
+.brainos-graph-toolbar select { max-width: 260px; }
+.brainos-graph-canvas { display: block; width: 100%; height: calc(100% - 78px); cursor: grab; touch-action: none; }
 .brainos-graph-canvas.is-dragging { cursor: grabbing; }
-.brainos-graph-empty { position: absolute; inset: 45px 0 0; display: grid; place-items: center; color: var(--text-muted); pointer-events: none; }
+.brainos-graph-empty { position: absolute; inset: 78px 0 0; display: grid; place-items: center; color: var(--text-muted); pointer-events: none; }
+.brainos-graph-status { position: absolute; left: 10px; right: 10px; bottom: 8px; color: var(--text-muted); font-size: var(--font-ui-small); pointer-events: none; }
+.brainos-node-editor { position: absolute; z-index: 2; width: min(320px, calc(100% - 16px)); padding: 12px; display: flex; flex-direction: column; gap: 8px; border: 1px solid var(--background-modifier-border); border-radius: 8px; background: var(--background-primary); box-shadow: var(--shadow-l); }
+.brainos-node-editor input, .brainos-node-editor textarea { width: 100%; box-sizing: border-box; }
+.brainos-node-editor textarea { min-height: 120px; resize: vertical; font-family: var(--font-monospace); }
+.brainos-node-editor-document { min-height: 260px !important; }
+.brainos-node-editor-target { color: var(--text-muted); font-size: var(--font-ui-small); }
+.brainos-node-editor-actions { display: flex; justify-content: flex-end; gap: 6px; }
