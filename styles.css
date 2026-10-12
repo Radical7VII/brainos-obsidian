@@ -1,0 +1,6 @@
+.brainos-graph-view { position: relative; height: 100%; overflow: hidden; }
+.brainos-graph-toolbar { display: flex; gap: 6px; align-items: center; padding: 8px; border-bottom: 1px solid var(--background-modifier-border); }
+.brainos-graph-toolbar input { flex: 1; min-width: 80px; }
+.brainos-graph-canvas { display: block; width: 100%; height: calc(100% - 45px); cursor: grab; }
+.brainos-graph-canvas.is-dragging { cursor: grabbing; }
+.brainos-graph-empty { position: absolute; inset: 45px 0 0; display: grid; place-items: center; color: var(--text-muted); pointer-events: none; }
