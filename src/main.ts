@@ -8,15 +8,23 @@ const DATA_VERSION = 1;
 
 type GraphNode = { path: string; label: string; openPath: string; x: number; y: number; degree: number };
 type GraphEdge = { from: string; to: string };
-type LayoutData = { version: number; positions: Record<string, { x: number; y: number }> };
+type BrainOSSettings = { noteFolder: string };
+type LayoutData = { version: number; positions: Record<string, { x: number; y: number }>; settings: BrainOSSettings };
 type GraphSnapshot = { nodes: GraphNode[]; edges: GraphEdge[] };
 
+const DEFAULT_SETTINGS: BrainOSSettings = { noteFolder: "BrainOS/Thoughts" };
+
 export default class BrainOSPlugin extends Plugin {
-  layout: LayoutData = { version: DATA_VERSION, positions: {} };
+  layout: LayoutData = { version: DATA_VERSION, positions: {}, settings: { ...DEFAULT_SETTINGS } };
   private refreshTimer: number | undefined;
 
   async onload() {
-    this.layout = { ...this.layout, ...(await this.loadData() ?? {}) };
+    const saved = await this.loadData() as Partial<LayoutData> | null;
+    this.layout = {
+      version: DATA_VERSION,
+      positions: saved?.positions ?? {},
+      settings: { ...DEFAULT_SETTINGS, ...(saved?.settings ?? {}) },
+    };
     this.registerView(VIEW_TYPE, (leaf) => new BrainOSGraphView(leaf, this));
     this.addRibbonIcon("git-branch", "打开 BrainOS 图谱", () => this.activateView());
     this.addCommand({ id: "open-graph", name: "打开 BrainOS 图谱", callback: () => this.activateView() });
@@ -245,11 +253,11 @@ class ThoughtModal extends Modal {
   private plugin: BrainOSPlugin; private title = ""; private source = "";
   constructor(app: App, plugin: BrainOSPlugin) { super(app); this.plugin = plugin; }
   onOpen() { this.titleEl.setText("创建 BrainOS 思考"); new Setting(this.contentEl).setName("标题").addText((text) => text.setPlaceholder("一个清晰的想法").onChange((value) => this.title = value)); new Setting(this.contentEl).setName("来源（可选）").addText((text) => text.onChange((value) => this.source = value)); new Setting(this.contentEl).addButton((button) => button.setButtonText("创建").setCta().onClick(() => void this.create())); }
-  private async create() { const title = this.title.trim(); if (!title) { new Notice("请输入标题"); return; } const path = await uniqueThoughtPath(this.plugin.app, title); const now = new Date().toISOString(); const source = this.source.trim() ? `source: ${JSON.stringify(this.source.trim())}\n` : ""; const state = JSON.stringify({ paths: [], draft: "", viewport: { x: 0, y: 0, zoom: 1 } }, null, 2); const body = `---\nbrainos_type: thought-file\nversion: 1\nid: ${crypto.randomUUID()}\ntitle: ${JSON.stringify(title)}\ncreated_at: ${now}\nupdated_at: ${now}\nstatus: active\n${source}---\n\n# ${title}\n\n## 思路\n\n尚未形成思路。\n\n<!-- brainos-state\n${state}\n-->\n`; await ensureFolder(this.plugin.app, "BrainOS/Thoughts"); await this.plugin.app.vault.create(path, body); this.close(); await this.plugin.app.workspace.openLinkText(path, "", true); }
+  private async create() { const title = this.title.trim(); if (!title) { new Notice("请输入标题"); return; } const path = await uniqueThoughtPath(this.plugin.app, title, this.plugin.layout.settings.noteFolder); const now = new Date().toISOString(); const source = this.source.trim() ? `source: ${JSON.stringify(this.source.trim())}\n` : ""; const state = JSON.stringify({ paths: [], draft: "", viewport: { x: 0, y: 0, zoom: 1 } }, null, 2); const body = `---\nbrainos_type: thought-file\nversion: 1\nid: ${crypto.randomUUID()}\ntitle: ${JSON.stringify(title)}\ncreated_at: ${now}\nupdated_at: ${now}\nstatus: active\n${source}---\n\n# ${title}\n\n## 思路\n\n尚未形成思路。\n\n<!-- brainos-state\n${state}\n-->\n`; await ensureFolder(this.plugin.app, this.plugin.layout.settings.noteFolder); await this.plugin.app.vault.create(path, body); this.close(); await this.plugin.app.workspace.openLinkText(path, "", true); }
   onClose() { this.contentEl.empty(); }
 }
 
 async function ensureFolder(app: App, folder: string) { if (!app.vault.getAbstractFileByPath(folder)) await app.vault.createFolder(folder); }
-async function uniqueThoughtPath(app: App, title: string) { await ensureFolder(app, "BrainOS"); await ensureFolder(app, "BrainOS/Thoughts"); const safe = title.replace(/[\\/:*?"<>|]/g, "-"); const base = normalizePath(`BrainOS/Thoughts/${safe}.thought.md`); if (!app.vault.getAbstractFileByPath(base)) return base; for (let i = 2; ; i++) { const path = normalizePath(`BrainOS/Thoughts/${safe} ${i}.thought.md`); if (!app.vault.getAbstractFileByPath(path)) return path; } }
+async function uniqueThoughtPath(app: App, title: string, folder: string) { const targetFolder = normalizePath(folder.trim().replace(/^\/+|\/+$/g, "")) || DEFAULT_SETTINGS.noteFolder; await ensureFolder(app, targetFolder); const safe = title.replace(/[\\/:*?"<>|]/g, "-"); const base = normalizePath(`${targetFolder}/${safe}.thought.md`); if (!app.vault.getAbstractFileByPath(base)) return base; for (let i = 2; ; i++) { const path = normalizePath(`${targetFolder}/${safe} ${i}.thought.md`); if (!app.vault.getAbstractFileByPath(path)) return path; } }
 
-class BrainOSSettingTab extends PluginSettingTab { constructor(app: App, private plugin: BrainOSPlugin) { super(app, plugin); } display() { this.containerEl.empty(); this.containerEl.createEl("h2", { text: "BrainOS Graph" }); new Setting(this.containerEl).setName("重新生成布局").setDesc("删除保存的坐标，下一次打开图谱时自动排列节点。").addButton((button) => button.setButtonText("重置").onClick(async () => { this.plugin.layout.positions = {}; await this.plugin.saveLayout(); this.plugin.refreshViews(); new Notice("图谱布局已重置"); })); } }
+class BrainOSSettingTab extends PluginSettingTab { constructor(app: App, private plugin: BrainOSPlugin) { super(app, plugin); } display() { this.containerEl.empty(); this.containerEl.createEl("h2", { text: "BrainOS Graph" }); new Setting(this.containerEl).setName("笔记存放位置").setDesc("创建 BrainOS 思考时使用的 vault 内文件夹路径。").addText((text) => text.setPlaceholder(DEFAULT_SETTINGS.noteFolder).setValue(this.plugin.layout.settings.noteFolder).onChange(async (value) => { this.plugin.layout.settings.noteFolder = value.trim() || DEFAULT_SETTINGS.noteFolder; await this.plugin.saveLayout(); })); new Setting(this.containerEl).setName("重新生成布局").setDesc("删除保存的坐标，下一次打开图谱时自动排列节点。").addButton((button) => button.setButtonText("重置").onClick(async () => { this.plugin.layout.positions = {}; await this.plugin.saveLayout(); this.plugin.refreshViews(); new Notice("图谱布局已重置"); })); } }

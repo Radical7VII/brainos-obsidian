@@ -19,7 +19,7 @@ var __copyProps = (to, from, except, desc) => {
 var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: true }), mod);
 var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "symbol" ? key + "" : key, value);
 
-// ObsidianPlugin/src/main.ts
+// src/main.ts
 var main_exports = {};
 __export(main_exports, {
   default: () => BrainOSPlugin
@@ -28,15 +28,21 @@ module.exports = __toCommonJS(main_exports);
 var import_obsidian = require("obsidian");
 var VIEW_TYPE = "brainos-graph-view";
 var DATA_VERSION = 1;
+var DEFAULT_SETTINGS = { noteFolder: "BrainOS/Thoughts" };
 var BrainOSPlugin = class extends import_obsidian.Plugin {
   constructor() {
     super(...arguments);
-    __publicField(this, "layout", { version: DATA_VERSION, positions: {} });
+    __publicField(this, "layout", { version: DATA_VERSION, positions: {}, settings: { ...DEFAULT_SETTINGS } });
     __publicField(this, "refreshTimer");
   }
   async onload() {
-    var _a;
-    this.layout = { ...this.layout, ...(_a = await this.loadData()) != null ? _a : {} };
+    var _a, _b;
+    const saved = await this.loadData();
+    this.layout = {
+      version: DATA_VERSION,
+      positions: (_a = saved == null ? void 0 : saved.positions) != null ? _a : {},
+      settings: { ...DEFAULT_SETTINGS, ...(_b = saved == null ? void 0 : saved.settings) != null ? _b : {} }
+    };
     this.registerView(VIEW_TYPE, (leaf) => new BrainOSGraphView(leaf, this));
     this.addRibbonIcon("git-branch", "\u6253\u5F00 BrainOS \u56FE\u8C31", () => this.activateView());
     this.addCommand({ id: "open-graph", name: "\u6253\u5F00 BrainOS \u56FE\u8C31", callback: () => this.activateView() });
@@ -411,7 +417,7 @@ var ThoughtModal = class extends import_obsidian.Modal {
       new import_obsidian.Notice("\u8BF7\u8F93\u5165\u6807\u9898");
       return;
     }
-    const path = await uniqueThoughtPath(this.plugin.app, title);
+    const path = await uniqueThoughtPath(this.plugin.app, title, this.plugin.layout.settings.noteFolder);
     const now = (/* @__PURE__ */ new Date()).toISOString();
     const source = this.source.trim() ? `source: ${JSON.stringify(this.source.trim())}
 ` : "";
@@ -436,7 +442,7 @@ ${source}---
 ${state}
 -->
 `;
-    await ensureFolder(this.plugin.app, "BrainOS/Thoughts");
+    await ensureFolder(this.plugin.app, this.plugin.layout.settings.noteFolder);
     await this.plugin.app.vault.create(path, body);
     this.close();
     await this.plugin.app.workspace.openLinkText(path, "", true);
@@ -448,14 +454,14 @@ ${state}
 async function ensureFolder(app, folder) {
   if (!app.vault.getAbstractFileByPath(folder)) await app.vault.createFolder(folder);
 }
-async function uniqueThoughtPath(app, title) {
-  await ensureFolder(app, "BrainOS");
-  await ensureFolder(app, "BrainOS/Thoughts");
+async function uniqueThoughtPath(app, title, folder) {
+  const targetFolder = (0, import_obsidian.normalizePath)(folder.trim().replace(/^\/+|\/+$/g, "")) || DEFAULT_SETTINGS.noteFolder;
+  await ensureFolder(app, targetFolder);
   const safe = title.replace(/[\\/:*?"<>|]/g, "-");
-  const base = (0, import_obsidian.normalizePath)(`BrainOS/Thoughts/${safe}.thought.md`);
+  const base = (0, import_obsidian.normalizePath)(`${targetFolder}/${safe}.thought.md`);
   if (!app.vault.getAbstractFileByPath(base)) return base;
   for (let i = 2; ; i++) {
-    const path = (0, import_obsidian.normalizePath)(`BrainOS/Thoughts/${safe} ${i}.thought.md`);
+    const path = (0, import_obsidian.normalizePath)(`${targetFolder}/${safe} ${i}.thought.md`);
     if (!app.vault.getAbstractFileByPath(path)) return path;
   }
 }
@@ -467,6 +473,10 @@ var BrainOSSettingTab = class extends import_obsidian.PluginSettingTab {
   display() {
     this.containerEl.empty();
     this.containerEl.createEl("h2", { text: "BrainOS Graph" });
+    new import_obsidian.Setting(this.containerEl).setName("\u7B14\u8BB0\u5B58\u653E\u4F4D\u7F6E").setDesc("\u521B\u5EFA BrainOS \u601D\u8003\u65F6\u4F7F\u7528\u7684 vault \u5185\u6587\u4EF6\u5939\u8DEF\u5F84\u3002").addText((text) => text.setPlaceholder(DEFAULT_SETTINGS.noteFolder).setValue(this.plugin.layout.settings.noteFolder).onChange(async (value) => {
+      this.plugin.layout.settings.noteFolder = value.trim() || DEFAULT_SETTINGS.noteFolder;
+      await this.plugin.saveLayout();
+    }));
     new import_obsidian.Setting(this.containerEl).setName("\u91CD\u65B0\u751F\u6210\u5E03\u5C40").setDesc("\u5220\u9664\u4FDD\u5B58\u7684\u5750\u6807\uFF0C\u4E0B\u4E00\u6B21\u6253\u5F00\u56FE\u8C31\u65F6\u81EA\u52A8\u6392\u5217\u8282\u70B9\u3002").addButton((button) => button.setButtonText("\u91CD\u7F6E").onClick(async () => {
       this.plugin.layout.positions = {};
       await this.plugin.saveLayout();
