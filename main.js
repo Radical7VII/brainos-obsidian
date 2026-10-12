@@ -473,7 +473,7 @@ var BrainOSSettingTab = class extends import_obsidian.PluginSettingTab {
   display() {
     this.containerEl.empty();
     this.containerEl.createEl("h2", { text: "BrainOS Graph" });
-    new import_obsidian.Setting(this.containerEl).setName("\u7B14\u8BB0\u5B58\u653E\u4F4D\u7F6E").setDesc("\u521B\u5EFA BrainOS \u601D\u8003\u65F6\u4F7F\u7528\u7684 vault \u5185\u6587\u4EF6\u5939\u8DEF\u5F84\u3002").addText((text) => text.setPlaceholder(DEFAULT_SETTINGS.noteFolder).setValue(this.plugin.layout.settings.noteFolder).onChange(async (value) => {
+    new import_obsidian.Setting(this.containerEl).setName("\u65B0\u5EFA\u7B14\u8BB0\u5B58\u653E\u4F4D\u7F6E").setDesc("\u521B\u5EFA\u65B0\u7B14\u8BB0\u65F6\u4F7F\u7528\u7684 vault \u5185\u6587\u4EF6\u5939\u8DEF\u5F84\uFF0C\u7559\u7A7A\u5219\u56DE\u9000\u5230 BrainOS/Thoughts\u3002").addText((text) => text.setPlaceholder(DEFAULT_SETTINGS.noteFolder).setValue(this.plugin.layout.settings.noteFolder).onChange(async (value) => {
       this.plugin.layout.settings.noteFolder = value.trim() || DEFAULT_SETTINGS.noteFolder;
       await this.plugin.saveLayout();
     }));
