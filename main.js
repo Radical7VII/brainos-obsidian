@@ -45,6 +45,7 @@ var BrainOSPlugin = class extends import_obsidian.Plugin {
     };
     this.registerView(VIEW_TYPE, (leaf) => new BrainOSGraphView(leaf, this));
     this.addRibbonIcon("git-branch", "\u6253\u5F00 BrainOS \u56FE\u8C31", () => this.activateView());
+    this.addRibbonIcon("lightbulb", "\u521B\u5EFA\u65B0\u601D\u8003", () => new ThoughtModal(this.app, this).open());
     this.addCommand({ id: "open-graph", name: "\u6253\u5F00 BrainOS \u56FE\u8C31", callback: () => this.activateView() });
     this.addCommand({ id: "refresh-graph", name: "\u5237\u65B0 BrainOS \u56FE\u8C31", callback: () => this.refreshViews() });
     this.addCommand({ id: "focus-current-note", name: "\u5C06\u56FE\u8C31\u805A\u7126\u5230\u5F53\u524D\u7B14\u8BB0", checkCallback: (checking) => {
@@ -54,7 +55,7 @@ var BrainOSPlugin = class extends import_obsidian.Plugin {
       if (!checking) view.focusCurrent();
       return true;
     } });
-    this.addCommand({ id: "create-thought", name: "\u521B\u5EFA BrainOS \u601D\u8003", callback: () => new ThoughtModal(this.app, this).open() });
+    this.addCommand({ id: "create-thought", name: "\u521B\u5EFA\u65B0\u601D\u8003", callback: () => new ThoughtModal(this.app, this).open() });
     this.addCommand({ id: "append-current-note", name: "\u5C06\u5F53\u524D\u7B14\u8BB0\u52A0\u5165\u5F53\u524D\u601D\u8003", callback: () => void this.appendCurrentNote() });
     this.registerEvent(this.app.vault.on("create", () => this.scheduleRefresh()));
     this.registerEvent(this.app.vault.on("modify", () => this.scheduleRefresh()));

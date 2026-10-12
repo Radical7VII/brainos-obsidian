@@ -27,6 +27,7 @@ export default class BrainOSPlugin extends Plugin {
     };
     this.registerView(VIEW_TYPE, (leaf) => new BrainOSGraphView(leaf, this));
     this.addRibbonIcon("git-branch", "打开 BrainOS 图谱", () => this.activateView());
+    this.addRibbonIcon("lightbulb", "创建新思考", () => new ThoughtModal(this.app, this).open());
     this.addCommand({ id: "open-graph", name: "打开 BrainOS 图谱", callback: () => this.activateView() });
     this.addCommand({ id: "refresh-graph", name: "刷新 BrainOS 图谱", callback: () => this.refreshViews() });
     this.addCommand({ id: "focus-current-note", name: "将图谱聚焦到当前笔记", checkCallback: (checking) => {
@@ -35,7 +36,7 @@ export default class BrainOSPlugin extends Plugin {
       if (!checking) view.focusCurrent();
       return true;
     }});
-    this.addCommand({ id: "create-thought", name: "创建 BrainOS 思考", callback: () => new ThoughtModal(this.app, this).open() });
+    this.addCommand({ id: "create-thought", name: "创建新思考", callback: () => new ThoughtModal(this.app, this).open() });
     this.addCommand({ id: "append-current-note", name: "将当前笔记加入当前思考", callback: () => void this.appendCurrentNote() });
     this.registerEvent(this.app.vault.on("create", () => this.scheduleRefresh()));
     this.registerEvent(this.app.vault.on("modify", () => this.scheduleRefresh()));
