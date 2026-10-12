@@ -50,12 +50,19 @@ export default class BrainOSPlugin extends Plugin {
   onunload() { if (this.refreshTimer) window.clearTimeout(this.refreshTimer); }
 
   async activateView() {
-    let leaf = this.app.workspace.getLeavesOfType(VIEW_TYPE)[0];
-    if (!leaf) {
-      leaf = this.app.workspace.getRightLeaf(false) ?? this.app.workspace.getLeaf("tab");
-      await leaf.setViewState({ type: VIEW_TYPE, active: true });
+    const workspace = this.app.workspace;
+    const mainRoot = workspace.rootSplit;
+    const leaves = workspace.getLeavesOfType(VIEW_TYPE);
+    const mainLeaf = leaves.find((leaf) => leaf.getRoot() === mainRoot);
+    // 早期版本把视图挂在右侧栏。残留的侧栏实例直接关掉，统一由主区域的标签页承载。
+    for (const leaf of leaves) {
+      const root = leaf.getRoot();
+      if (root === workspace.leftSplit || root === workspace.rightSplit) leaf.detach();
     }
-    this.app.workspace.revealLeaf(leaf);
+    if (mainLeaf) { await workspace.revealLeaf(mainLeaf); return; }
+    const leaf = workspace.getLeaf("tab");
+    await leaf.setViewState({ type: VIEW_TYPE, active: true });
+    await workspace.revealLeaf(leaf);
   }
 
   scheduleRefresh() {

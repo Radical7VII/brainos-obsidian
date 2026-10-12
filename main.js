@@ -69,13 +69,21 @@ var BrainOSPlugin = class extends import_obsidian.Plugin {
     if (this.refreshTimer) window.clearTimeout(this.refreshTimer);
   }
   async activateView() {
-    var _a;
-    let leaf = this.app.workspace.getLeavesOfType(VIEW_TYPE)[0];
-    if (!leaf) {
-      leaf = (_a = this.app.workspace.getRightLeaf(false)) != null ? _a : this.app.workspace.getLeaf("tab");
-      await leaf.setViewState({ type: VIEW_TYPE, active: true });
+    const workspace = this.app.workspace;
+    const mainRoot = workspace.rootSplit;
+    const leaves = workspace.getLeavesOfType(VIEW_TYPE);
+    const mainLeaf = leaves.find((leaf2) => leaf2.getRoot() === mainRoot);
+    for (const leaf2 of leaves) {
+      const root = leaf2.getRoot();
+      if (root === workspace.leftSplit || root === workspace.rightSplit) leaf2.detach();
     }
-    this.app.workspace.revealLeaf(leaf);
+    if (mainLeaf) {
+      await workspace.revealLeaf(mainLeaf);
+      return;
+    }
+    const leaf = workspace.getLeaf("tab");
+    await leaf.setViewState({ type: VIEW_TYPE, active: true });
+    await workspace.revealLeaf(leaf);
   }
   scheduleRefresh() {
     if (this.refreshTimer) window.clearTimeout(this.refreshTimer);
