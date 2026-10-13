@@ -7,8 +7,6 @@
 .brainos-graph-empty { position: absolute; inset: 78px 0 0; display: grid; place-items: center; color: var(--text-muted); pointer-events: none; }
 .brainos-graph-status { position: absolute; left: 10px; right: 10px; bottom: 8px; color: var(--text-muted); font-size: var(--font-ui-small); pointer-events: none; }
 .brainos-node-editor { position: absolute; z-index: 2; width: min(320px, calc(100% - 16px)); padding: 12px; display: flex; flex-direction: column; gap: 8px; border: 1px solid var(--background-modifier-border); border-radius: 8px; background: var(--background-primary); box-shadow: var(--shadow-l); }
-.brainos-node-editor input, .brainos-node-editor textarea { width: 100%; box-sizing: border-box; }
-.brainos-node-editor textarea { min-height: 120px; resize: vertical; font-family: var(--font-monospace); }
-.brainos-node-editor-document { min-height: 260px !important; }
+.brainos-node-editor input { width: 100%; box-sizing: border-box; }
 .brainos-node-editor-target { color: var(--text-muted); font-size: var(--font-ui-small); }
 .brainos-node-editor-actions { display: flex; justify-content: flex-end; gap: 6px; }
