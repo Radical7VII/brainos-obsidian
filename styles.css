@@ -1,14 +1,40 @@
-.brainos-graph-view { position: relative; height: 100%; overflow: hidden; }
-.brainos-graph-toolbar { display: flex; gap: 6px; align-items: center; padding: 8px; border-bottom: 1px solid var(--background-modifier-border); }
-.brainos-graph-toolbar input { flex: 1; min-width: 80px; }
-.brainos-graph-toolbar select { max-width: 260px; }
-.brainos-graph-canvas { display: block; width: 100%; height: calc(100% - 78px); cursor: grab; touch-action: none; }
+.brainos-graph-view { position: relative; display: flex; flex-direction: column; height: 100%; padding: 0 !important; overflow: hidden; background: var(--graph-background, var(--background-primary)); }
+.brainos-graph-canvas { display: block; width: 100%; height: 100%; flex: 1 1 auto; min-height: 0; cursor: grab; touch-action: none; }
+.brainos-graph-canvas.is-touch-panning { cursor: move; }
 .brainos-graph-canvas.is-dragging { cursor: grabbing; }
-.brainos-graph-empty { position: absolute; inset: 78px 0 0; display: grid; place-items: center; color: var(--text-muted); pointer-events: none; }
-.brainos-graph-status { position: absolute; left: 10px; right: 10px; bottom: 8px; color: var(--text-muted); font-size: var(--font-ui-small); pointer-events: none; }
-.brainos-node-editor { position: absolute; z-index: 2; width: min(320px, calc(100% - 16px)); padding: 12px; display: flex; flex-direction: column; gap: 8px; border: 1px solid var(--background-modifier-border); border-radius: 8px; background: var(--background-primary); box-shadow: var(--shadow-l); }
+.brainos-graph-empty { position: absolute; inset: 0; display: grid; place-items: center; color: var(--text-muted); font-size: var(--font-ui-small); pointer-events: none; }
+.brainos-graph-tools { position: absolute; z-index: 2; top: 12px; right: 12px; display: flex; gap: 4px; }
+.brainos-graph-tools .clickable-icon, .brainos-controls-heading .clickable-icon { display: flex; align-items: center; justify-content: center; width: 30px; height: 30px; padding: 6px; border: 0; border-radius: var(--radius-s, 5px); box-shadow: none; color: var(--text-muted); background: var(--background-primary); cursor: pointer; }
+.brainos-graph-tools .clickable-icon:hover, .brainos-controls-heading .clickable-icon:hover { color: var(--text-normal); background: var(--background-modifier-hover); }
+.brainos-graph-tools .clickable-icon[aria-expanded="true"] { color: var(--interactive-accent); }
+.brainos-graph-tools svg, .brainos-controls-heading svg { width: 16px; height: 16px; }
+.brainos-graph-search { position: absolute; z-index: 3; top: 12px; right: 84px; width: min(260px, calc(100% - 108px)); }
+.brainos-graph-search[hidden] { display: none; }
+.brainos-graph-search input { width: 100%; height: 30px; box-sizing: border-box; }
+.brainos-graph-status { position: absolute; left: 14px; bottom: 12px; max-width: calc(100% - 28px); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: var(--text-faint); font-size: var(--font-ui-smaller); pointer-events: none; }
+.brainos-graph-controls { position: absolute; z-index: 3; top: 50px; right: 12px; width: min(310px, calc(100% - 24px)); max-height: calc(100% - 76px); box-sizing: border-box; overflow: auto; padding: 10px 14px; border: 1px solid var(--background-modifier-border); border-radius: var(--radius-m, 8px); background: var(--background-primary); box-shadow: var(--shadow-s); }
+.brainos-controls-heading { display: flex; justify-content: space-between; align-items: center; font-size: var(--font-ui-small); }
+.brainos-graph-controls h3 { margin: 12px 0 4px; font-size: var(--font-ui-small); }
+.brainos-graph-controls .setting-item { padding: 7px 0; border-top: 0; }
+.brainos-graph-controls .setting-item-name { font-size: var(--font-ui-small); }
+.brainos-graph-controls .setting-item-control { min-width: 100px; }
+.brainos-graph-controls input[type="range"] { width: 110px; }
+.brainos-node-editor { box-sizing: border-box; max-height: calc(100% - 16px); overflow: auto; position: absolute; z-index: 2; width: min(320px, calc(100% - 16px)); padding: 12px; display: flex; flex-direction: column; gap: 8px; border: 1px solid var(--background-modifier-border); border-radius: 8px; background: var(--background-primary); box-shadow: var(--shadow-l); }
 .brainos-node-editor input, .brainos-node-editor textarea { width: 100%; box-sizing: border-box; }
 .brainos-node-editor textarea { min-height: 120px; resize: vertical; font-family: var(--font-monospace); }
 .brainos-node-editor-document { min-height: 260px !important; }
+.brainos-node-candidates { display: flex; flex-direction: column; gap: 2px; max-height: 180px; overflow: auto; margin: -2px 0 2px; }
+.brainos-node-candidate { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; width: 100%; padding: 6px 8px; border: 0; border-radius: 5px; background: transparent; color: var(--text-normal); text-align: left; cursor: pointer; }
+.brainos-node-candidate:hover, .brainos-node-candidate.is-selected { background: var(--background-modifier-hover); }
+.brainos-node-candidate-label { overflow: hidden; max-width: 100%; text-overflow: ellipsis; white-space: nowrap; }
+.brainos-node-candidate-detail { overflow: hidden; max-width: 100%; color: var(--text-muted); font-size: var(--font-ui-smaller); text-overflow: ellipsis; white-space: nowrap; }
 .brainos-node-editor-target { color: var(--text-muted); font-size: var(--font-ui-small); }
+.brainos-node-editor-preview { min-height: 120px; max-height: 360px; overflow: auto; padding: 8px; border: 1px solid var(--background-modifier-border); border-radius: 6px; }
 .brainos-node-editor-actions { display: flex; justify-content: flex-end; gap: 6px; }
+
+
+/* New nodes are edited directly beneath their Canvas circle. */
+.brainos-node-title-editor { position: absolute; z-index: 2; transform: translateX(-50%); margin: 0; padding: 0; border: 0; background: transparent; box-shadow: none; }
+.brainos-node-title-input { width: 110px; max-width: min(420px, 70vw); height: 30px; padding: 3px 6px !important; border: 0 !important; border-bottom: 1px solid var(--interactive-accent) !important; border-radius: 0 !important; background: var(--graph-background, var(--background-primary)) !important; box-shadow: none !important; color: var(--graph-text, var(--text-normal)); font: 14px var(--font-interface); text-align: center; outline: none; }
+.brainos-node-title-input:focus { box-shadow: none !important; }
+.brainos-graph-canvas:focus { outline: none; }

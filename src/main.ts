@@ -1,28 +1,84 @@
 import {
-  App, MarkdownView, Modal, Notice, Plugin, PluginSettingTab, Setting,
+  App, MarkdownView, Modal, Notice, Plugin, PluginSettingTab, Setting, TFile, WorkspaceLeaf,
 } from "obsidian";
 import { BrainOSGraphView, VIEW_TYPE } from "./graph-view";
-import { DEFAULT_NOTE_FOLDER, createThought, editThought, stepKey } from "./thoughts";
+import { DEFAULT_NOTE_FOLDER, ThoughtFileExistsError, createThought } from "./thoughts";
+import { GraphOptions, defaultGraphOptions, loadGraphOptions } from "./graph-options";
+import { BrainOSAIProvider, UnconfiguredAIProvider } from "./ai";
+import { MindViewMode } from "./mind-view-mode";
 
-const DATA_VERSION = 1;
+const DATA_VERSION = 4;
 type BrainOSSettings = { noteFolder: string };
-type LayoutData = { version: number; positions: Record<string, { x: number; y: number }>; settings: BrainOSSettings };
+export type Viewport = { x: number; y: number; zoom: number };
+export type SessionRecord = {
+  id: string;
+  title: string;
+  thoughtPath?: string;
+  stepKeys: string[];
+  startedAt: string;
+  endedAt?: string;
+};
+export type LayoutData = {
+  version: number;
+  positions: Record<string, { x: number; y: number }>;
+  viewports: Record<string, Viewport>;
+  settings: BrainOSSettings;
+  sessions: SessionRecord[];
+  activeSessionId?: string;
+  graph: GraphOptions;
+};
 const DEFAULT_SETTINGS: BrainOSSettings = { noteFolder: DEFAULT_NOTE_FOLDER };
 
 export default class BrainOSPlugin extends Plugin {
-  layout: LayoutData = { version: DATA_VERSION, positions: {}, settings: { ...DEFAULT_SETTINGS } };
+  layout: LayoutData = {
+    version: DATA_VERSION,
+    positions: {},
+    viewports: {},
+    settings: { ...DEFAULT_SETTINGS },
+    sessions: [],
+    graph: defaultGraphOptions(),
+  };
+  /** Provider seam for a future OpenAI/DeepSeek adapter. */
+  readonly aiProvider: BrainOSAIProvider = new UnconfiguredAIProvider();
   private refreshTimer: number | undefined;
+  lastMarkdownPath?: string;
+  private readonly viewMode = new MindViewMode();
+  private readonly headerActions = new Map<MarkdownView, HTMLElement>();
+  private unloading = false;
+  private creatingThought = false;
 
   async onload() {
     const saved = await this.loadData() as Partial<LayoutData> | null;
+    const savedPositions = isRecord(saved?.positions)
+      ? Object.fromEntries(Object.entries(saved.positions).filter(([, point]) => isPoint(point)))
+      : {};
+    const savedViewports = isRecord(saved?.viewports)
+      ? Object.fromEntries(Object.entries(saved.viewports).filter(([, viewport]) => isViewport(viewport)))
+      : {};
     this.layout = {
       version: DATA_VERSION,
-      positions: saved?.positions ?? {},
+      positions: savedPositions,
+      viewports: savedViewports,
       settings: { ...DEFAULT_SETTINGS, ...(saved?.settings ?? {}) },
+      sessions: Array.isArray(saved?.sessions) ? saved.sessions : [],
+      activeSessionId: saved?.activeSessionId,
+      graph: loadGraphOptions(saved?.graph),
     };
+    this.lastMarkdownPath = this.app.workspace.getActiveFile()?.path;
+    this.registerEvent(this.app.workspace.on("file-open", file => {
+      if (file?.extension === "md") this.lastMarkdownPath = file.path;
+      this.syncHeaderActions();
+    }));
     this.registerView(VIEW_TYPE, (leaf) => new BrainOSGraphView(leaf, this));
-    this.addRibbonIcon("git-branch", "打开 BrainOS 图谱", () => this.activateView());
-    this.addRibbonIcon("lightbulb", "创建新思考", () => new ThoughtModal(this.app, this).open());
+    this.app.workspace.onLayoutReady(() => this.syncHeaderActions());
+    this.registerEvent(this.app.workspace.on("layout-change", () => this.syncHeaderActions()));
+    this.registerEvent(this.app.workspace.on("active-leaf-change", () => this.syncHeaderActions()));
+    this.addRibbonIcon("git-branch", "切换思维视图", () => void this.toggleMindView());
+    this.addCommand({ id: "toggle-mind-view", name: "切换编辑／思维视图", checkCallback: checking => {
+      const supported = !!this.app.workspace.getActiveViewOfType(MarkdownView)?.file || !!this.app.workspace.getActiveViewOfType(BrainOSGraphView)?.file;
+      if (supported && !checking) void this.toggleMindView();
+      return supported;
+    }});
     this.addCommand({ id: "open-graph", name: "打开 BrainOS 图谱", callback: () => this.activateView() });
     this.addCommand({ id: "refresh-graph", name: "刷新 BrainOS 图谱", callback: () => this.refreshViews() });
     this.addCommand({ id: "focus-current-note", name: "将图谱聚焦到当前笔记", checkCallback: (checking) => {
@@ -31,8 +87,20 @@ export default class BrainOSPlugin extends Plugin {
       if (!checking) view.focusCurrent();
       return true;
     }});
-    this.addCommand({ id: "create-thought", name: "创建新思考", callback: () => new ThoughtModal(this.app, this).open() });
-    this.addCommand({ id: "append-current-note", name: "将当前笔记加入当前思考", callback: () => void this.appendCurrentNote() });
+    this.addCommand({ id: "create-thought", name: "新建思考", callback: () => void this.createNewThought() });
+    this.addCommand({ id: "reference-node", name: "引用已有节点到当前思考", checkCallback: checking => {
+      const view = this.app.workspace.getActiveViewOfType(BrainOSGraphView);
+      if (!view?.file) return false;
+      if (!checking) void view.openReferencePicker();
+      return true;
+    }});
+    this.addCommand({ id: "start-session", name: "开始 BrainOS Session", callback: () => this.startSession() });
+    this.addCommand({ id: "end-session", name: "结束 BrainOS Session", checkCallback: (checking) => {
+      const active = this.activeSession;
+      if (!active) return false;
+      if (!checking) this.endSession();
+      return true;
+    }});
     this.registerEvent(this.app.vault.on("create", () => this.scheduleRefresh()));
     this.registerEvent(this.app.vault.on("modify", () => this.scheduleRefresh()));
     this.registerEvent(this.app.vault.on("delete", () => this.scheduleRefresh()));
@@ -42,7 +110,76 @@ export default class BrainOSPlugin extends Plugin {
     this.addSettingTab(new BrainOSSettingTab(this.app, this));
   }
 
-  onunload() { if (this.refreshTimer) window.clearTimeout(this.refreshTimer); }
+  onunload() {
+    this.unloading = true;
+    if (this.refreshTimer) window.clearTimeout(this.refreshTimer);
+    for (const action of this.headerActions.values()) action.remove();
+    this.headerActions.clear();
+    // Leave ordinary Markdown tabs usable when the plugin is disabled.
+    for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE)) {
+      const file = (leaf.view as BrainOSGraphView).file;
+      if (file) void this.viewMode.showMarkdown(leaf, file.path);
+    }
+  }
+
+  private syncHeaderActions() {
+    if (this.unloading) return;
+    const views = new Set<MarkdownView>();
+    this.app.workspace.iterateAllLeaves(leaf => {
+      if (!(leaf.view instanceof MarkdownView)) return;
+      const view = leaf.view;
+      views.add(view);
+      const existing = this.headerActions.get(view);
+      if (existing?.isConnected) return;
+      existing?.remove();
+      const action = view.addAction("git-branch", "切换到思维视图", () => void this.openMindView(leaf, view.file));
+      action.addClass("brainos-mind-view-action");
+      // addAction owns the native header; place our switch just before its existing actions.
+      action.parentElement?.prepend(action);
+      this.headerActions.set(view, action);
+    });
+    for (const [view, action] of this.headerActions) {
+      if (!views.has(view)) { action.remove(); this.headerActions.delete(view); }
+    }
+  }
+
+  async openMindView(leaf: WorkspaceLeaf, file: TFile | null) {
+    if (!file || file.extension !== "md") return;
+    this.lastMarkdownPath = file.path;
+    await this.viewMode.showMind(leaf, file.path);
+  }
+
+  async openMarkdownView(leaf: WorkspaceLeaf, file: TFile) {
+    await this.viewMode.showMarkdown(leaf, file.path);
+    this.syncHeaderActions();
+  }
+
+  async toggleMindView() {
+    const mind = this.app.workspace.getActiveViewOfType(BrainOSGraphView);
+    if (mind?.file) { await this.openMarkdownView(mind.leaf, mind.file); return; }
+    const markdown = this.app.workspace.getActiveViewOfType(MarkdownView);
+    if (markdown?.file) { await this.openMindView(markdown.leaf, markdown.file); return; }
+    await this.activateView();
+  }
+
+  async createNewThought(title = "未命名思考") {
+    if (this.creatingThought) return false;
+    this.creatingThought = true;
+    try {
+      const file = await createThought(this.app, title, this.layout.settings.noteFolder);
+      const leaf = this.app.workspace.getLeaf("tab");
+      await this.openMindView(leaf, file);
+      await this.app.workspace.revealLeaf(leaf);
+      this.refreshViews();
+      return true;
+    } catch (error) {
+      new Notice(error instanceof Error ? error.message : String(error));
+      if (title === "未命名思考" && error instanceof ThoughtFileExistsError) {
+        new ThoughtNameModal(this.app, this).open();
+      }
+      return false;
+    } finally { this.creatingThought = false; }
+  }
 
   async activateView() {
     const workspace = this.app.workspace;
@@ -74,41 +211,98 @@ export default class BrainOSPlugin extends Plugin {
 
   async saveLayout() { await this.saveData(this.layout); }
 
-  private async appendCurrentNote() {
-    const note = this.app.workspace.getActiveViewOfType(MarkdownView)?.file;
-    const thoughtLeaf = this.app.workspace.getLeavesOfType("markdown").find((leaf) => {
-      const file = (leaf.view as MarkdownView).file;
-      return file && this.app.metadataCache.getFileCache(file)?.frontmatter?.brainos_type === "thought-file";
-    });
-    const thought = thoughtLeaf ? (thoughtLeaf.view as MarkdownView).file : undefined;
-    if (!note || !thought || note.path === thought.path) { new Notice("请同时打开一个普通笔记和一个 BrainOS 思考文件"); return; }
-    await editThought(this.app, thought.path, state => {
-      state.paths ??= [];
-      if (!state.paths.length) state.paths.push({ id: "path-main", title: "主思路", steps: [] });
-      const path = state.paths[0]; path.steps ??= [];
-      const previous = path.steps[path.steps.length - 1];
-      if (previous && stepKey(previous) === note.path) throw new Error("当前笔记已经是思路的最后一步");
-      path.steps.push({ id: crypto.randomUUID(), atom: note.path });
-    }).then(() => {
-      new Notice(`已加入思考：${thought.basename}`); this.refreshViews();
-    }).catch(error => new Notice(error instanceof Error ? error.message : String(error)));
+  get activeSession(): SessionRecord | undefined {
+    return this.layout.sessions.find(session => session.id === this.layout.activeSessionId && !session.endedAt)
+      ?? this.layout.sessions.find(session => !session.endedAt);
   }
+
+  startSession(thoughtPath?: string) {
+    if (this.activeSession) {
+      new Notice("已有一个 BrainOS Session 正在记录");
+      return;
+    }
+    const path = thoughtPath?.trim() || undefined;
+    const thoughtFile = path ? this.app.vault.getAbstractFileByPath(path) : undefined;
+    const thoughtTitle = thoughtFile instanceof TFile
+      ? this.app.metadataCache.getFileCache(thoughtFile)?.frontmatter?.title
+      : undefined;
+    const title = path
+      ? String(thoughtTitle ?? path)
+      : "未命名 Session";
+    const session: SessionRecord = {
+      id: crypto.randomUUID(),
+      title: path ? `从「${title}」开始` : "未命名 Session",
+      ...(path ? { thoughtPath: path } : {}),
+      stepKeys: [],
+      startedAt: new Date().toISOString(),
+    };
+    this.layout.sessions.unshift(session);
+    this.layout.activeSessionId = session.id;
+    void this.saveLayout();
+    new Notice(`Session 已开始：${session.title}`);
+    this.refreshViews();
+  }
+
+  endSession() {
+    const session = this.activeSession;
+    if (!session) return;
+    session.endedAt = new Date().toISOString();
+    this.layout.activeSessionId = undefined;
+    void this.saveLayout();
+    new Notice(`Session 已保存：${session.stepKeys.length} 个节点`);
+    this.refreshViews();
+  }
+
+  recordSessionStep(stepPath: string, thoughtPath?: string) {
+    const session = this.activeSession;
+    if (!session) return;
+    if (thoughtPath && !session.thoughtPath) session.thoughtPath = thoughtPath;
+    if (!session.stepKeys.includes(stepPath)) session.stepKeys.push(stepPath);
+    void this.saveLayout();
+  }
+
+
 }
 
-class ThoughtModal extends Modal {
-  private plugin: BrainOSPlugin; private title = ""; private source = "";
-  constructor(app: App, plugin: BrainOSPlugin) { super(app); this.plugin = plugin; }
-  onOpen() { this.titleEl.setText("创建 BrainOS 思考"); new Setting(this.contentEl).setName("标题").addText((text) => text.setPlaceholder("一个清晰的想法").onChange((value) => this.title = value)); new Setting(this.contentEl).setName("来源（可选）").addText((text) => text.onChange((value) => this.source = value)); new Setting(this.contentEl).addButton((button) => button.setButtonText("创建").setCta().onClick(() => void this.create())); }
-  private async create() {
-    const title = this.title.trim(); if (!title) { new Notice("请输入标题"); return; }
-    try {
-      const file = await createThought(this.app, title, this.plugin.layout.settings.noteFolder, this.source);
-      this.close(); this.plugin.refreshViews();
-      await this.plugin.app.workspace.openLinkText(file.path, "", true);
-    } catch (error) { new Notice(error instanceof Error ? error.message : String(error)); }
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function isPoint(value: unknown): value is { x: number; y: number } {
+  return isRecord(value) && Number.isFinite(value.x) && Number.isFinite(value.y)
+    && Math.abs(value.x as number) <= 1e7 && Math.abs(value.y as number) <= 1e7;
+}
+
+function isViewport(value: unknown): value is Viewport {
+  return isRecord(value)
+    && Number.isFinite(value.x) && Number.isFinite(value.y)
+    && Math.abs(value.x as number) <= 1e7 && Math.abs(value.y as number) <= 1e7
+    && Number.isFinite(value.zoom)
+    && (value.zoom as number) > 0 && (value.zoom as number) <= 100;
+}
+
+class ThoughtNameModal extends Modal {
+  constructor(app: App, private plugin: BrainOSPlugin) { super(app); }
+  onOpen() {
+    this.titleEl.setText("已有未命名思考，为新思考取个名字");
+    const form = this.contentEl.createEl("form");
+    const input = form.createEl("input", { type: "text", placeholder: "思考名称", attr: { "aria-label": "思考名称", required: "" } });
+    const create = form.createEl("button", { text: "创建", cls: "mod-cta", attr: { type: "submit" } });
+    form.onsubmit = event => {
+      event.preventDefault();
+      const title = input.value.trim();
+      if (!title) return;
+      if (title === "未命名思考") { new Notice("请为新思考使用另一个名称"); return; }
+      if (create.disabled) return;
+      create.disabled = true;
+      void this.plugin.createNewThought(title).then(created => {
+        if (created) this.close();
+        else { create.disabled = false; input.focus(); }
+      });
+    };
+    input.focus();
   }
   onClose() { this.contentEl.empty(); }
 }
-
 
 class BrainOSSettingTab extends PluginSettingTab { constructor(app: App, private plugin: BrainOSPlugin) { super(app, plugin); } display() { this.containerEl.empty(); this.containerEl.createEl("h2", { text: "BrainOS Graph" }); new Setting(this.containerEl).setName("新建笔记存放位置").setDesc("创建新笔记时使用的 vault 内文件夹路径，留空则回退到 BrainOS/Thoughts。").addText((text) => text.setPlaceholder(DEFAULT_SETTINGS.noteFolder).setValue(this.plugin.layout.settings.noteFolder).onChange(async (value) => { this.plugin.layout.settings.noteFolder = value.trim() || DEFAULT_SETTINGS.noteFolder; await this.plugin.saveLayout(); })); new Setting(this.containerEl).setName("重新生成布局").setDesc("删除保存的坐标，下一次打开图谱时自动排列节点。").addButton((button) => button.setButtonText("重置").onClick(async () => { this.plugin.layout.positions = {}; await this.plugin.saveLayout(); this.plugin.refreshViews(); new Notice("图谱布局已重置"); })); } }

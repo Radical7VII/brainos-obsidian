@@ -1,8 +1,17 @@
-import { ItemView, MarkdownView, Menu, Modal, Notice, Setting, TFile, WorkspaceLeaf, setIcon } from "obsidian";
+import { Component, FileView, MarkdownRenderer, MarkdownView, Menu, Modal, Notice, Setting, SuggestModal, TFile, WorkspaceLeaf, setIcon } from "obsidian";
 import type BrainOSPlugin from "./main";
-import { GraphEdge, GraphNode, GraphSnapshot, Point, addRoute, buildSnapshot, createAtom, createThought, editThought, parseThoughtState, splitRoutes } from "./thoughts";
+import { GraphEdge, GraphNode, GraphSnapshot, Point, buildSnapshot } from "./thoughts";
+import { GraphLayout } from "./graph-layout";
+import { defaultGraphOptions, graphForces } from "./graph-options";
+import { buildVaultSnapshot, selectGraph } from "./vault-graph";
+import { removeVaultLink } from "./vault-links";
+import { createThoughtNode, editThoughtNode, linkThoughtNodes, readThoughtNode, referenceThoughtNode, removeThoughtNode, unlinkThoughtNodes } from "./thought-store";
+import { splitNodeKey } from "./thought-document";
+import { approachOpacity, edgeInViewport, edgeStrokeKey, graphLabelAlpha, intersectsViewport, nodeScreenRadius, wrapGraphLabel } from "./graph-rendering";
+import { titleKeyAction } from "./node-title-input";
 
-export const VIEW_TYPE = "brainos-graph-view";
+export { VIEW_TYPE } from "./mind-view-mode";
+import { VIEW_TYPE } from "./mind-view-mode";
 
 type Gesture = { pointer: number; start: Point; last: Point; moved: boolean } & (
   { kind: "node"; node: GraphNode; offset: Point } |
@@ -10,10 +19,17 @@ type Gesture = { pointer: number; start: Point; last: Point; moved: boolean } & 
   { kind: "link"; node: GraphNode; end: Point }
 );
 
-export class BrainOSGraphView extends ItemView {
+type TouchPoint = { clientX: number; clientY: number };
+
+// Keep the camera range aligned with BrainOS' native GraphCamera. A tighter
+// range makes large Obsidian vaults impossible to inspect and makes the fit
+// button disagree with the wheel and trackpad gestures.
+const MIN_ZOOM = 0.05;
+const MAX_ZOOM = 8;
+
+export class BrainOSGraphView extends FileView {
   private canvas!: HTMLCanvasElement;
   private search!: HTMLInputElement;
-  private thoughtSelect!: HTMLSelectElement;
   private status!: HTMLElement;
   private snapshot: GraphSnapshot = { nodes: [], edges: [], thoughts: [] };
   private nodes: GraphNode[] = [];
@@ -22,47 +38,102 @@ export class BrainOSGraphView extends ItemView {
   private zoom = 1;
   private pan: Point = { x: 0, y: 0 };
   private selected?: string;
+  private hovered?: string;
   private gesture?: Gesture;
   private editor?: HTMLElement;
+  private editorComponent?: Component;
   private busy = false;
   private refreshRevision = 0;
   private closed = false;
+  private readonly forceLayout = new GraphLayout(() => {
+    if (this.closed) return;
+    this.startLayoutAnimation(); this.draw();
+    if (!this.forceLayout.isRunning) this.scheduleLayoutSave();
+  });
+  private controls?: HTMLElement;
+  private searchTimer?: number;
+  private localCenter?: string;
+  private cameraFrame?: number;
+  private targetZoom?: number;
+  private zoomAnchor?: Point;
+  private get graphOptions() { return this.plugin.layout.graph.display; }
+  private animationFrame?: number;
+  private layoutSaveTimer?: number;
+  private layoutSaveFingerprint = "";
+  private currentViewportKey?: string;
+  private initialRefreshFrame?: number;
+  private rendererFrame?: number;
+  private rendererLastDraw = 0;
+  private readonly rendererOpacity = new Map<string, number>();
+  private draftNode?: GraphNode;
+  private draftParent?: string;
+  private composing = false;
+  private touchPoints = new Map<number, TouchPoint>();
+  private searchBox?: HTMLElement;
+  private searchButton?: HTMLButtonElement;
+  private controlsButton?: HTMLButtonElement;
+  private touchPan?: { center: Point; start: Point; distance: number; zoom: number };
 
-  constructor(leaf: WorkspaceLeaf, private plugin: BrainOSPlugin) { super(leaf); }
+  constructor(leaf: WorkspaceLeaf, private plugin: BrainOSPlugin) { super(leaf); this.allowNoFile = true; }
   getViewType() { return VIEW_TYPE; }
-  getDisplayText() { return "BrainOS 图谱"; }
+  getDisplayText() { return this.file?.basename ?? "思维视图"; }
   getIcon() { return "git-branch"; }
+  canAcceptExtension(extension: string) { return extension === "md"; }
+  private get source() { return this.file ? "thoughts" : this.plugin.layout.graph.source; }
+
+  async onLoadFile(file: TFile) {
+    this.closeEditor();
+    this.file = file;
+    this.thoughtPath = file.path;
+    this.localCenter = undefined;
+    this.selected = undefined; this.hovered = undefined;
+    this.restoreViewport();
+    if (this.canvas) await this.refresh();
+  }
+
+  async onUnloadFile() { this.closeEditor(); this.persistViewport(); }
+
+  async onRename(file: TFile) {
+    await super.onRename(file);
+    this.thoughtPath = file.path;
+    this.localCenter = undefined;
+    await this.refresh();
+  }
 
   async onOpen() {
     this.closed = false;
     this.contentEl.empty();
     this.contentEl.addClass("brainos-graph-view");
-    const toolbar = this.contentEl.createDiv({ cls: "brainos-graph-toolbar" });
-    this.thoughtSelect = toolbar.createEl("select", { attr: { "aria-label": "当前思考" } });
-    this.thoughtSelect.onchange = () => {
-      this.thoughtPath = this.thoughtSelect.value;
-      this.selected = undefined;
-      this.closeEditor();
-      this.filterSnapshot();
-      this.draw();
+    const edit = this.addAction("pencil", "切换到编辑视图", () => {
+      if (this.file) void this.plugin.openMarkdownView(this.leaf, this.file);
+      else new Notice("先打开一篇笔记，或通过命令「BrainOS Graph：新建思考」开始");
+    });
+    edit.addClass("brainos-edit-view-action");
+    edit.parentElement?.prepend(edit);
+    const tools = this.contentEl.createDiv({ cls: "brainos-graph-tools" });
+    this.searchButton = tools.createEl("button", { cls: "clickable-icon", attr: { "aria-label": "搜索节点", "aria-expanded": "false", title: "搜索节点（⌘/Ctrl F）" } });
+    setIcon(this.searchButton, "search"); this.searchButton.onclick = () => this.toggleSearch();
+    this.controlsButton = tools.createEl("button", { cls: "clickable-icon", attr: { "aria-label": "图谱设置", "aria-expanded": "false", title: "图谱设置" } });
+    setIcon(this.controlsButton, "sliders-horizontal"); this.controlsButton.onclick = () => this.toggleControls();
+    this.searchBox = this.contentEl.createDiv({ cls: "brainos-graph-search" }); this.searchBox.hidden = true;
+    this.search = this.searchBox.createEl("input", { type: "search", placeholder: "搜索节点…", attr: { "aria-label": "搜索节点" } });
+    this.search.onkeydown = event => {
+      if (event.key === "Escape") { event.preventDefault(); this.toggleSearch(false); }
     };
-    const create = toolbar.createEl("button", { text: "新建节点" });
-    create.onclick = () => void this.beginCreate(this.screenToWorld(this.canvas.clientWidth / 2, this.canvas.clientHeight / 2));
-    const extend = toolbar.createEl("button", { text: "延伸节点", attr: { title: "选中节点后按 Tab" } });
-    extend.onclick = () => void this.createRelative(true);
-    const refresh = toolbar.createEl("button", { attr: { "aria-label": "刷新图谱" } });
-    setIcon(refresh, "refresh-cw"); refresh.onclick = () => void this.refresh();
-    const focus = toolbar.createEl("button", { text: "聚焦当前" }); focus.onclick = () => this.focusCurrent();
-    this.search = toolbar.createEl("input", { type: "search", placeholder: "搜索原子…", attr: { "aria-label": "搜索原子" } });
-    this.search.oninput = () => this.draw();
-    this.canvas = this.contentEl.createEl("canvas", { cls: "brainos-graph-canvas", attr: { "aria-label": "BrainOS 可编辑图谱" } });
+    this.search.oninput = () => {
+      if (this.searchTimer !== undefined) window.clearTimeout(this.searchTimer);
+      this.searchTimer = window.setTimeout(() => { this.searchTimer = undefined; if (!this.closed) { this.filterSnapshot(); this.draw(); } }, 250);
+    };
+    this.forceLayout.configure(graphForces(this.plugin.layout.graph));
+    this.canvas = this.contentEl.createEl("canvas", { cls: "brainos-graph-canvas", attr: { "aria-label": "思维视图，可用 Tab 延伸节点、Enter 创建同级节点" } });
     this.canvas.tabIndex = 0;
     this.status = this.contentEl.createDiv({ cls: "brainos-graph-status" });
     this.registerDomEvent(this.canvas, "pointerdown", event => this.onPointerDown(event));
     this.registerDomEvent(this.canvas, "pointermove", event => this.onPointerMove(event));
     this.registerDomEvent(this.canvas, "pointerup", event => this.onPointerUp(event));
-    this.registerDomEvent(this.canvas, "pointercancel", () => this.cancelGesture());
-    this.registerDomEvent(this.canvas, "lostpointercapture", () => this.cancelGesture());
+    this.registerDomEvent(this.canvas, "pointerleave", () => { if (!this.gesture) { this.hovered = undefined; this.draw(); } });
+    this.registerDomEvent(this.canvas, "pointercancel", event => this.onPointerCancel(event));
+    this.registerDomEvent(this.canvas, "lostpointercapture", event => this.onPointerCancel(event));
     this.registerDomEvent(this.canvas, "wheel", event => this.onWheel(event), { passive: false });
     this.registerDomEvent(this.canvas, "dblclick", event => this.onDoubleClick(event));
     this.registerDomEvent(this.canvas, "contextmenu", event => this.onContextMenu(event));
@@ -70,50 +141,244 @@ export class BrainOSGraphView extends ItemView {
     const observer = new ResizeObserver(() => this.resize());
     observer.observe(this.contentEl);
     this.register(() => observer.disconnect());
-    await this.refresh();
+    // FileView receives its file in setState after onOpen. Avoid briefly building
+    // the entire vault before the file's own mind view is loaded.
+    this.initialRefreshFrame = requestAnimationFrame(() => {
+      this.initialRefreshFrame = undefined;
+      if (!this.closed && !this.file) void this.refresh();
+    });
+    this.canvas.focus();
   }
 
   async onClose() {
     this.closed = true;
     this.refreshRevision++;
+    if (this.initialRefreshFrame !== undefined) cancelAnimationFrame(this.initialRefreshFrame);
+    this.initialRefreshFrame = undefined;
+    if (this.animationFrame !== undefined) cancelAnimationFrame(this.animationFrame);
+    this.animationFrame = undefined;
+    if (this.layoutSaveTimer !== undefined) window.clearTimeout(this.layoutSaveTimer);
+    this.layoutSaveTimer = undefined;
+    this.persistLayoutPositions();
+    this.persistViewport();
+    if (this.searchTimer !== undefined) window.clearTimeout(this.searchTimer);
+    if (this.rendererFrame !== undefined) cancelAnimationFrame(this.rendererFrame);
+    if (this.cameraFrame !== undefined) cancelAnimationFrame(this.cameraFrame);
+    this.rendererFrame = undefined; this.cameraFrame = undefined;
+    this.forceLayout.dispose();
+    this.controls?.remove(); this.controls = undefined;
     this.cancelGesture();
     this.closeEditor();
   }
 
   async refresh() {
     const revision = ++this.refreshRevision;
-    const snapshot = await buildSnapshot(this.app);
+    const thoughtFiles = this.app.vault.getMarkdownFiles().filter(file => this.app.metadataCache.getFileCache(file)?.frontmatter?.brainos_type === "thought-file");
+    const thoughts = thoughtFiles.map(file => ({ path: file.path, title: String(this.app.metadataCache.getFileCache(file)?.frontmatter?.title ?? file.basename) }));
+    const snapshot = this.source === "vault"
+      ? buildVaultSnapshot(this.app, thoughts, this.plugin.layout.graph.filter)
+      : await buildSnapshot(this.app, this.file ?? undefined);
     if (this.closed || revision !== this.refreshRevision) return;
     this.snapshot = snapshot;
+    this.forceLayout.configure(graphForces(this.plugin.layout.graph));
     if (this.thoughtPath && !snapshot.thoughts.some(thought => thought.path === this.thoughtPath)) this.thoughtPath = "";
-    this.thoughtSelect.empty();
-    this.thoughtSelect.createEl("option", { text: "全部思考", value: "" });
-    for (const thought of snapshot.thoughts) this.thoughtSelect.createEl("option", { text: `${thought.title} — ${thought.path}`, value: thought.path });
-    this.thoughtSelect.value = this.thoughtPath;
-    const radius = Math.max(180, Math.sqrt(snapshot.nodes.length) * 85);
-    snapshot.nodes.forEach((node, index) => {
-      const angle = index * Math.PI * (3 - Math.sqrt(5));
-      const r = radius * Math.sqrt((index + 1) / Math.max(1, snapshot.nodes.length));
-      const position = this.plugin.layout.positions[node.path] ?? { x: Math.cos(angle) * r, y: Math.sin(angle) * r };
-      Object.assign(node, position);
-      this.plugin.layout.positions[node.path] = { ...position };
-    });
+    if (this.currentViewportKey !== this.viewportKey()) this.restoreViewport();
     this.filterSnapshot();
     if (this.selected && !this.nodes.some(node => node.path === this.selected)) this.selected = undefined;
+    this.forceLayout.setSelected(this.selected);
+    this.startLayoutAnimation();
     this.resize();
   }
 
   private filterSnapshot() {
-    this.nodes = this.thoughtPath ? this.snapshot.nodes.filter(node => node.thoughts.includes(this.thoughtPath)) : this.snapshot.nodes;
-    this.edges = this.thoughtPath ? this.snapshot.edges.filter(edge => edge.thoughts.includes(this.thoughtPath)) : this.snapshot.edges;
+    const base = this.source === "thoughts" && this.thoughtPath
+      ? { ...this.snapshot, nodes: this.snapshot.nodes.filter(node => node.thoughts.includes(this.thoughtPath)), edges: this.snapshot.edges.filter(edge => edge.thoughts.includes(this.thoughtPath)) }
+      : this.snapshot;
+    const visible = { ...base, nodes: base.nodes.filter(node => !this.plugin.layout.graph.hiddenPaths.includes(node.path)) };
+    const result = selectGraph(visible, this.search?.value.trim() ?? "", this.plugin.layout.graph.filter, this.localCenter);
+    this.nodes = this.draftNode ? result.nodes.filter(node => !node.placeholder) : result.nodes; this.edges = result.edges;
+    if (this.draftNode) {
+      this.nodes.push(this.draftNode);
+      if (this.draftParent && this.nodes.some(node => node.path === this.draftParent)) this.edges.push({ from: this.draftParent, to: this.draftNode.path, thoughts: [] });
+    }
+    if (this.selected && !this.nodes.some(node => node.path === this.selected)) this.selected = undefined;
+    if (this.hovered && !this.nodes.some(node => node.path === this.hovered)) this.hovered = undefined;
+    this.forceLayout.sync(this.nodes, this.edges, this.plugin.layout.positions);
+    this.forceLayout.setSelected(this.selected);
+    this.startLayoutAnimation();
+  }
+
+  private toggleSearch(show = this.searchBox?.hidden ?? true) {
+    if (!this.searchBox) return;
+    this.searchBox.hidden = !show;
+    this.searchButton?.setAttribute("aria-expanded", String(show));
+    if (show) { this.search.focus(); this.search.select(); }
+    else { this.search.value = ""; this.filterSnapshot(); this.draw(); this.canvas.focus(); }
+  }
+
+  onPaneMenu(menu: Menu, source: string) {
+    super.onPaneMenu(menu, source);
+    if (this.file) menu.addItem(item => item.setTitle("切换到编辑视图").setIcon("pencil").onClick(() => void this.plugin.openMarkdownView(this.leaf, this.file!)));
+    menu.addItem(item => item.setTitle("新建思考").setIcon("file-plus").onClick(() => void this.plugin.createNewThought()));
+    menu.addSeparator();
+    menu.addItem(item => item.setTitle("新建节点").setIcon("plus").onClick(() => void this.beginCreate(this.screenToWorld(this.canvas.clientWidth / 2, this.canvas.clientHeight / 2))));
+    menu.addItem(item => item.setTitle("引用已有节点…").setIcon("link").onClick(() => void this.openReferencePicker()));
+    menu.addItem(item => item.setTitle("延伸节点（Tab）").setIcon("git-branch").onClick(() => void this.createRelative(true)));
+    menu.addItem(item => item.setTitle("适配图谱（F）").setIcon("maximize").onClick(() => this.fitToView()));
+    menu.addItem(item => item.setTitle("聚焦当前笔记").setIcon("focus").onClick(() => this.focusCurrent()));
+    if (!this.file && this.source === "vault") menu.addItem(item => item.setTitle(this.localCenter ? "显示全部笔记" : "只看选中节点的邻域").setIcon("network").onClick(() => {
+      const path = this.selected ?? this.plugin.lastMarkdownPath;
+      if (!this.localCenter && !this.snapshot.nodes.some(node => node.path === path)) { new Notice("请先选中一个节点"); return; }
+      this.localCenter = this.localCenter ? undefined : path;
+      this.filterSnapshot(); this.fitToView();
+    }));
+    menu.addSeparator();
+    menu.addItem(item => item.setTitle("图谱设置").setIcon("sliders-horizontal").onClick(() => this.toggleControls()));
+    menu.addItem(item => item.setTitle("刷新图谱").setIcon("refresh-cw").onClick(() => void this.refresh()));
+    menu.addItem(item => item.setTitle(this.plugin.activeSession ? "结束 Session" : "开始 Session").setIcon("clock").onClick(() => {
+      if (this.plugin.activeSession) this.plugin.endSession();
+      else this.plugin.startSession(this.thoughtPath || undefined);
+    }));
+    menu.addItem(item => item.setTitle("操作提示").setIcon("circle-help").onClick(() => {
+      new Notice("双击空白新建 · Tab 延伸 · Enter 同级 · 空格编辑 · Alt 拖动连线 · F 适配图谱", 10000);
+    }));
+  }
+
+  private toggleControls() {
+    if (this.controls) { this.controls.remove(); this.controls = undefined; this.controlsButton?.setAttribute("aria-expanded", "false"); return; }
+    const panel = this.contentEl.createDiv({ cls: "brainos-graph-controls" }); this.controls = panel;
+    this.controlsButton?.setAttribute("aria-expanded", "true");
+    const heading = panel.createDiv({ cls: "brainos-controls-heading" });
+    heading.createEl("strong", { text: "图谱设置" });
+    const close = heading.createEl("button", { cls: "clickable-icon", attr: { "aria-label": "关闭图谱设置" } });
+    setIcon(close, "x"); close.onclick = () => this.toggleControls();
+    const settings = this.plugin.layout.graph;
+    if (!this.file) {
+      new Setting(panel).setName("图谱来源").addDropdown(control => control.addOptions({ vault: "笔记双链", thoughts: "思维节点" }).setValue(this.source).onChange(value => {
+        settings.source = value as "vault" | "thoughts";
+        this.thoughtPath = ""; this.localCenter = undefined;
+        void this.plugin.saveLayout(); void this.refresh(); this.toggleControls();
+      }));
+      if (this.source === "thoughts") {
+        const options: Record<string, string> = { "": "全部思考" };
+        for (const thought of this.snapshot.thoughts) options[thought.path] = thought.title;
+        new Setting(panel).setName("当前思考").addDropdown(control => control.addOptions(options).setValue(this.thoughtPath).onChange(value => {
+          this.persistViewport(); this.closeEditor(); this.thoughtPath = value; this.selected = undefined;
+          this.restoreViewport(); this.filterSnapshot(); this.draw();
+        }));
+      }
+    }
+    const save = () => { void this.plugin.saveLayout(); };
+    const slider = (name: string, value: number, min: number, max: number, step: number, change: (value: number) => void) => {
+      new Setting(panel).setName(name).addSlider(control => control.setLimits(min, max, step).setValue(value).setDynamicTooltip().onChange(value => { change(value); save(); this.draw(); }));
+    };
+    panel.createEl("h3", { text: "显示" });
+    slider("节点大小", settings.display.nodeSizeMultiplier, .25, 3, .05, value => settings.display.nodeSizeMultiplier = value);
+    slider("连线粗细", settings.display.lineSizeMultiplier, .1, 5, .1, value => settings.display.lineSizeMultiplier = value);
+    slider("文字淡出阈值", settings.display.textFadeMultiplier, -3, 3, .1, value => settings.display.textFadeMultiplier = value);
+    new Setting(panel).setName("显示箭头").addToggle(control => control.setValue(settings.display.showArrows).onChange(value => { settings.display.showArrows = value; save(); this.draw(); }));
+    panel.createEl("h3", { text: "力学" });
+    const forces = (key: keyof typeof settings.forces, value: number) => { settings.forces[key] = value; this.forceLayout.configure(graphForces(settings)); this.startLayoutAnimation(); };
+    slider("中心力", settings.forces.center, 0, 1, .01, value => forces("center", value));
+    slider("排斥力", settings.forces.repel, 0, 20, .1, value => forces("repel", value));
+    slider("连接力", settings.forces.link, 0, 1, .01, value => forces("link", value));
+    slider("连接长度", settings.forces.distance, 30, 500, 1, value => forces("distance", value));
+    panel.createEl("h3", { text: "筛选" });
+    new Setting(panel).setName("恢复隐藏的节点").addButton(button => button.setButtonText("恢复").onClick(() => {
+      settings.hiddenPaths = []; save(); this.filterSnapshot(); this.draw();
+    }));
+    const toggle = (name: string, key: "showTags" | "showAttachments" | "showUnresolved" | "showOrphans" | "localIncoming" | "localOutgoing") => new Setting(panel).setName(name).addToggle(control => control.setValue(settings.filter[key]).onChange(value => { settings.filter[key] = value; save(); void this.refresh(); }));
+    toggle("标签", "showTags"); toggle("附件", "showAttachments"); toggle("未创建的笔记", "showUnresolved"); toggle("孤立节点", "showOrphans");
+    slider("局部图谱深度", settings.filter.localDepth, 1, 5, 1, value => { settings.filter.localDepth = value; this.filterSnapshot(); });
+    toggle("局部图谱入链", "localIncoming"); toggle("局部图谱出链", "localOutgoing");
+    new Setting(panel).setName("恢复默认图谱").addButton(button => button.setButtonText("重置").onClick(() => {
+      const currentSource = settings.source;
+      this.plugin.layout.graph = defaultGraphOptions(); this.plugin.layout.graph.source = currentSource;
+      this.plugin.layout.positions = {}; this.forceLayout.reset(); this.forceLayout.configure(graphForces(this.plugin.layout.graph));
+      this.controls?.remove(); this.controls = undefined; this.controlsButton?.setAttribute("aria-expanded", "false"); save(); void this.refresh();
+    }));
+  }
+
+  private startLayoutAnimation() {
+    if (this.closed || this.animationFrame !== undefined || !this.forceLayout.isRunning) return;
+    this.animationFrame = requestAnimationFrame(() => {
+      this.animationFrame = undefined;
+      if (this.closed) return;
+      this.forceLayout.tick(this.nodes);
+      this.draw();
+      if (this.forceLayout.isRunning) this.startLayoutAnimation();
+      else this.scheduleLayoutSave();
+    });
+  }
+
+  private scheduleLayoutSave() {
+    if (this.layoutSaveTimer !== undefined || this.closed) return;
+    this.layoutSaveTimer = window.setTimeout(() => {
+      this.layoutSaveTimer = undefined;
+      this.persistLayoutPositions();
+    }, 500);
+  }
+
+  private persistLayoutPositions() {
+    const positions = this.forceLayout.snapshot();
+    if (this.draftNode) delete positions[this.draftNode.path];
+    const fingerprint = JSON.stringify(positions);
+    let changed = false;
+    if (fingerprint !== this.layoutSaveFingerprint) {
+      this.layoutSaveFingerprint = fingerprint;
+      Object.assign(this.plugin.layout.positions, positions);
+      changed = true;
+    }
+    changed = this.persistViewport() || changed;
+    if (changed) void this.plugin.saveLayout();
+  }
+
+  private viewportKey() { return this.file ? `file:${this.file.path}` : this.thoughtPath || "__all__"; }
+
+  private restoreViewport() {
+    this.currentViewportKey = this.viewportKey();
+    const saved = this.plugin.layout.viewports?.[this.viewportKey()];
+    if (!saved || !Number.isFinite(saved.x) || !Number.isFinite(saved.y) || !Number.isFinite(saved.zoom)) {
+      this.pan = { x: 0, y: 0 };
+      this.zoom = 1;
+      return;
+    }
+    this.pan = { x: saved.x, y: saved.y };
+    this.zoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, saved.zoom));
+  }
+
+  private persistViewport(): boolean {
+    if (!this.plugin.layout.viewports) this.plugin.layout.viewports = {};
+    const next = { x: this.pan.x, y: this.pan.y, zoom: this.zoom };
+    const previous = this.plugin.layout.viewports[this.viewportKey()];
+    if (previous && previous.x === next.x && previous.y === next.y && previous.zoom === next.zoom) return false;
+    this.plugin.layout.viewports[this.viewportKey()] = next;
+    return true;
+  }
+
+  private fitToView() {
+    const points = this.nodes.filter(node => Number.isFinite(node.x) && Number.isFinite(node.y));
+    if (!points.length) {
+      this.pan = { x: 0, y: 0 }; this.zoom = 1; this.persistViewport(); this.draw(); return;
+    }
+    const minX = Math.min(...points.map(node => node.x));
+    const maxX = Math.max(...points.map(node => node.x));
+    const minY = Math.min(...points.map(node => node.y));
+    const maxY = Math.max(...points.map(node => node.y));
+    const width = Math.max(1, maxX - minX), height = Math.max(1, maxY - minY);
+    const padding = 110;
+    this.zoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, Math.min((this.canvas.clientWidth - padding) / width, (this.canvas.clientHeight - padding) / height)));
+    this.pan = { x: -(minX + maxX) / 2, y: -(minY + maxY) / 2 };
+    this.persistViewport();
+    this.draw(); this.canvas?.focus();
   }
 
   focusCurrent() {
-    const file = this.app.workspace.getActiveViewOfType(MarkdownView)?.file;
-    if (!file) { new Notice("当前没有打开的 Markdown 笔记"); return; }
-    const node = this.nodes.find(item => item.openPath === file.path);
+    const file = this.file ?? this.app.workspace.getActiveViewOfType(MarkdownView)?.file ?? this.app.vault.getAbstractFileByPath(this.plugin.lastMarkdownPath ?? "");
+    if (!(file instanceof TFile)) { new Notice("当前没有打开的 Markdown 笔记"); return; }
+    const node = this.nodes.find(item => item.ownerPath === file.path) ?? this.nodes.find(item => item.openPath === file.path);
     if (!node) { new Notice("当前文件未出现在所选思考图谱中"); return; }
-    this.selected = node.path; this.pan = { x: -node.x, y: -node.y }; this.draw();
+    this.selected = node.path; this.hovered = node.path; this.forceLayout.setSelected(this.selected); this.pan = { x: -node.x, y: -node.y }; this.scheduleLayoutSave(); this.startLayoutAnimation(); this.draw(); this.canvas.focus();
   }
 
   private resize() {
@@ -132,55 +397,178 @@ export class BrainOSGraphView extends ItemView {
     return { x: (x - this.canvas.clientWidth / 2) / this.zoom - this.pan.x, y: (y - this.canvas.clientHeight / 2) / this.zoom - this.pan.y };
   }
   private nodeAt(x: number, y: number) {
-    for (let i = this.nodes.length - 1; i >= 0; i--) {
-      const point = this.worldToScreen(this.nodes[i]);
-      if (Math.hypot(point.x - x, point.y - y) <= Math.max(10, Math.min(12, 5 + this.nodes[i].degree * .7))) return this.nodes[i];
+    // Compare to the drawn radius. An oversized invisible hit box otherwise
+    // makes dense graphs select a neighbouring point instead of the closest.
+    let closest: GraphNode | undefined;
+    let closestDistance = Infinity;
+    for (const node of this.nodes) {
+      const point = this.worldToScreen(node);
+      const radius = nodeScreenRadius(node.weight ?? node.degree, this.zoom, this.graphOptions.nodeSizeMultiplier);
+      const distance = Math.hypot(point.x - x, point.y - y);
+      if (distance <= Math.max(radius + 3, 10) && distance < closestDistance) {
+        closest = node; closestDistance = distance;
+      }
     }
+    return closest;
   }
 
   private draw() {
-    if (!this.canvas) return;
+    if (!this.canvas || this.closed) return;
     const ctx = this.canvas.getContext("2d"); if (!ctx) return;
-    const dpr = window.devicePixelRatio || 1; ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.clearRect(0, 0, this.canvas.clientWidth, this.canvas.clientHeight);
+    const width = this.canvas.clientWidth, height = this.canvas.clientHeight;
+    const dpr = window.devicePixelRatio || 1;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, width, height);
     const colors = getComputedStyle(this.canvas);
-    const edgeColor = colors.getPropertyValue("--text-muted") || "#888";
-    const accent = colors.getPropertyValue("--interactive-accent") || "#7c3aed";
-    const text = colors.getPropertyValue("--text-normal") || "#222";
+    const color = (...properties: string[]) => {
+      for (const property of properties) {
+        const value = colors.getPropertyValue(property).trim();
+        if (value) return value;
+      }
+      return "#888888";
+    };
+    const edgeColor = color("--graph-line", "--brainos-edge", "--background-modifier-border");
+    const fill = color("--graph-node", "--text-muted");
+    const focusedFill = color("--graph-node-focused", "--text-accent", "--interactive-accent");
+    const accent = color("--interactive-accent", "--text-accent");
+    const text = color("--graph-text", "--text-normal");
+    const dim = color("--graph-node-unresolved", "--text-faint");
+    const typeColors = {
+      tag: color("--graph-node-tag", "--color-green"),
+      attachment: color("--graph-node-attachment", "--color-yellow"),
+      unresolved: dim,
+      note: fill,
+    };
+    const options = this.graphOptions;
+    const zoom = Math.max(0.0001, this.zoom), visualScale = Math.sqrt(zoom);
     const query = this.search.value.trim().toLocaleLowerCase();
-    const matches = new Set(this.nodes.filter(node => node.label.toLocaleLowerCase().includes(query) || node.path.toLocaleLowerCase().includes(query)).map(node => node.path));
+    // Empty strings match every title. Treating those as search hits used to
+    // paint the entire idle graph in the highlight/accent colour.
+    const matches = new Set(query ? this.nodes.filter(node => node.label.toLocaleLowerCase().includes(query)
+      || node.path.toLocaleLowerCase().includes(query)).map(node => node.path) : []);
     const byPath = new Map(this.nodes.map(node => [node.path, node]));
-    ctx.lineWidth = 1; ctx.strokeStyle = edgeColor;
+    const focus = this.hovered && byPath.has(this.hovered) ? this.hovered : this.selected;
+    const neighbors = new Set<string>();
+    if (focus) for (const edge of this.edges) {
+      if (edge.from === focus) neighbors.add(edge.to);
+      if (edge.to === focus) neighbors.add(edge.from);
+    }
+    const now = performance.now();
+    const elapsed = this.rendererLastDraw ? now - this.rendererLastDraw : 16.67;
+    this.rendererLastDraw = now;
+    let fading = false;
+    const alive = new Set<string>();
+    const opacity = (key: string, target: number) => {
+      if (alive.has(key)) return this.rendererOpacity.get(key)!;
+      alive.add(key);
+      const value = approachOpacity(this.rendererOpacity.get(key) ?? 1, target, elapsed);
+      this.rendererOpacity.set(key, value);
+      if (value !== target) fading = true;
+      return value;
+    };
+    const points = new Map(this.nodes.map(node => [node.path, this.worldToScreen(node)]));
+    const radii = new Map(this.nodes.map(node => [node.path,
+      nodeScreenRadius(node.weight ?? node.degree, zoom, options.nodeSizeMultiplier)]));
+    const strokes = new Set<string>();
+    ctx.lineCap = "round";
     for (const edge of this.edges) {
-      const a = byPath.get(edge.from), b = byPath.get(edge.to); if (!a || !b) continue;
-      const p = this.worldToScreen(a), q = this.worldToScreen(b);
-      ctx.globalAlpha = query && (!matches.has(a.path) || !matches.has(b.path)) ? .18 : .55;
-      ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(q.x, q.y); ctx.stroke();
-      const angle = Math.atan2(q.y - p.y, q.x - p.x), tip = { x: q.x - Math.cos(angle) * 15, y: q.y - Math.sin(angle) * 15 };
-      ctx.beginPath(); ctx.moveTo(tip.x - Math.cos(angle - .5) * 7, tip.y - Math.sin(angle - .5) * 7); ctx.lineTo(tip.x, tip.y); ctx.lineTo(tip.x - Math.cos(angle + .5) * 7, tip.y - Math.sin(angle + .5) * 7); ctx.stroke();
+      const a = byPath.get(edge.from), b = byPath.get(edge.to);
+      const p = points.get(edge.from), q = points.get(edge.to);
+      if (!a || !b || !p || !q || edge.from === edge.to) continue;
+      const edgeActive = edge.from === focus || edge.to === focus;
+      const strokeKey = edgeStrokeKey(edge.from, edge.to);
+      const alpha = opacity("e:" + strokeKey, !focus || edgeActive ? 1 : 0.2);
+      if (!edgeInViewport(p, q, width, height, options.lineSizeMultiplier + 2)) continue;
+      const dx = q.x - p.x, dy = q.y - p.y, distance = Math.hypot(dx, dy);
+      if (!Number.isFinite(distance) || distance < 0.001) continue;
+      const ux = dx / distance, uy = dy / distance;
+      const sourceRadius = radii.get(a.path)!, targetRadius = radii.get(b.path)!;
+      ctx.globalAlpha = alpha;
+      ctx.strokeStyle = edgeActive ? accent : edgeColor;
+      // Canvas coordinates are already projected. Obsidian's world line width
+      // divides by zoom, which becomes a constant screen-space thickness here.
+      ctx.lineWidth = Math.max(0.1, options.lineSizeMultiplier);
+      if (!strokes.has(strokeKey) && distance > sourceRadius + targetRadius) {
+        strokes.add(strokeKey);
+        ctx.beginPath();
+        ctx.moveTo(p.x + ux * sourceRadius, p.y + uy * sourceRadius);
+        ctx.lineTo(q.x - ux * targetRadius, q.y - uy * targetRadius);
+        ctx.stroke();
+      }
+      if (options.showArrows && distance > sourceRadius + targetRadius + 10) {
+        const arrowAlpha = Math.max(0, Math.min(1, 2 * (zoom - 0.3)));
+        ctx.globalAlpha = alpha * arrowAlpha * 0.5;
+        ctx.fillStyle = text;
+        const tipX = q.x - ux * (targetRadius + 1), tipY = q.y - uy * (targetRadius + 1);
+        const size = 8 * Math.sqrt(Math.max(0.1, options.lineSizeMultiplier));
+        ctx.beginPath(); ctx.moveTo(tipX, tipY);
+        ctx.lineTo(tipX - ux * size - uy * size * 0.5, tipY - uy * size + ux * size * 0.5);
+        ctx.lineTo(tipX - ux * size + uy * size * 0.5, tipY - uy * size - ux * size * 0.5);
+        ctx.closePath(); ctx.fill();
+      }
     }
     ctx.globalAlpha = 1;
     if (this.gesture?.kind === "link") {
       const point = this.worldToScreen(this.gesture.node);
-      ctx.strokeStyle = accent; ctx.setLineDash([5, 4]); ctx.beginPath(); ctx.moveTo(point.x, point.y); ctx.lineTo(this.gesture.end.x, this.gesture.end.y); ctx.stroke(); ctx.setLineDash([]);
+      ctx.strokeStyle = accent; ctx.lineWidth = 1.5; ctx.setLineDash([5, 4]);
+      ctx.beginPath(); ctx.moveTo(point.x, point.y); ctx.lineTo(this.gesture.end.x, this.gesture.end.y); ctx.stroke(); ctx.setLineDash([]);
     }
-    for (const node of this.nodes) {
-      const point = this.worldToScreen(node), radius = Math.max(5, Math.min(12, 5 + node.degree * .7));
-      ctx.globalAlpha = query && !matches.has(node.path) ? .18 : 1;
-      ctx.fillStyle = accent; ctx.beginPath(); ctx.arc(point.x, point.y, radius, 0, Math.PI * 2); ctx.fill();
-      if (node.path === this.selected) { ctx.strokeStyle = accent; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(point.x, point.y, radius + 5, 0, Math.PI * 2); ctx.stroke(); ctx.lineWidth = 1; }
-      ctx.font = `12px ${colors.getPropertyValue("--font-text") || "sans-serif"}`; ctx.textAlign = "center"; ctx.fillStyle = text;
-      ctx.fillText(node.label.slice(0, 32), point.x, point.y + radius + 15);
+    const labelAlpha = graphLabelAlpha(zoom, options.textFadeMultiplier);
+    const fontFamily = colors.getPropertyValue("--font-interface").trim() || colors.getPropertyValue("--font-text").trim() || "sans-serif";
+    // Draw focused nodes last so a nearby dot cannot cover the active target.
+    const orderedNodes = this.nodes.filter(node => node.path !== focus);
+    const focusedNode = focus ? byPath.get(focus) : undefined;
+    if (focusedNode) orderedNodes.push(focusedNode);
+    for (const node of orderedNodes) {
+      const point = points.get(node.path)!, radius = radii.get(node.path)!;
+      if (!Number.isFinite(point.x) || !Number.isFinite(point.y)) continue;
+      const isFocus = node.path === focus, isMatch = matches.has(node.path);
+      const alpha = opacity("n:" + node.path, !focus || isFocus || neighbors.has(node.path) ? 1 : 0.2);
+      const kind = node.kind ?? "note";
+      const circleVisible = intersectsViewport({ left: point.x - radius - 3, right: point.x + radius + 3,
+        top: point.y - radius - 3, bottom: point.y + radius + 3 }, width, height);
+      if (circleVisible) {
+        ctx.globalAlpha = alpha * (kind === "unresolved" || node.placeholder ? 0.5 : 1);
+        ctx.fillStyle = isFocus ? accent : node.path === this.selected ? focusedFill : isMatch ? focusedFill : node.placeholder ? dim : typeColors[kind];
+        ctx.beginPath(); ctx.arc(point.x, point.y, radius, 0, Math.PI * 2); ctx.fill();
+        if (isFocus || node.path === this.selected) {
+          ctx.strokeStyle = focusedFill; ctx.globalAlpha = alpha; ctx.lineWidth = 1;
+          ctx.beginPath(); ctx.arc(point.x, point.y, radius + 2, 0, Math.PI * 2); ctx.stroke();
+        }
+      }
+      if (node.path === this.draftNode?.path) continue;
+      const alphaText = isFocus ? 1 : labelAlpha * alpha;
+      if (alphaText <= 0.001) continue;
+      const baseSize = nodeScreenRadius(node.weight ?? node.degree, 1, options.nodeSizeMultiplier);
+      const labelScale = isFocus && zoom < 1 ? 1 : visualScale;
+      const fontSize = (14 + baseSize / 4) * labelScale;
+      const textTop = point.y + radius + 5 * labelScale + (isFocus ? 15 : 0);
+      const maxWidth = Math.min(300 * labelScale, Math.max(80, width - 24));
+      const lineHeight = fontSize * 1.2;
+      if (!intersectsViewport({ left: point.x - maxWidth / 2, right: point.x + maxWidth / 2,
+        top: textTop, bottom: textTop + lineHeight * (isFocus ? 8 : 4) }, width, height)) continue;
+      ctx.font = `${fontSize}px ${fontFamily}`;
+      const lines = wrapGraphLabel(node.label, value => ctx.measureText(value).width, maxWidth, isFocus ? 8 : 4);
+      ctx.globalAlpha = alphaText; ctx.textAlign = "center"; ctx.textBaseline = "top"; ctx.fillStyle = text;
+      lines.forEach((line, index) => ctx.fillText(line, point.x, textTop + index * lineHeight));
     }
+    for (const key of this.rendererOpacity.keys()) if (!alive.has(key)) this.rendererOpacity.delete(key);
     ctx.globalAlpha = 1;
+    if (fading && this.rendererFrame === undefined) this.rendererFrame = requestAnimationFrame(() => {
+      this.rendererFrame = undefined;
+      if (!this.closed) this.draw();
+    });
     let empty = this.contentEl.querySelector<HTMLElement>(".brainos-graph-empty");
-    if (!this.nodes.length && !empty) empty = this.contentEl.createDiv({ cls: "brainos-graph-empty", text: "双击空白处或点击「新建节点」，开始一个思考。" });
+    if (!this.nodes.length && !empty) empty = this.contentEl.createDiv({ cls: "brainos-graph-empty", text: "双击空白，写下第一个想法" });
     if (this.nodes.length) empty?.remove();
     const selected = this.nodes.find(node => node.path === this.selected);
-    this.status.setText(selected ? `已选：${selected.label} · Tab 延伸 · Enter 同级 · 空格编辑 · Alt 拖动连线 · 右键更多` : "双击空白创建 · 拖动节点移动 · 拖动空白平移 · 滚轮缩放");
+    this.positionDraftEditor();
+    this.status.setText(this.draftNode ? "输入节点标题 · Enter 确认 · Tab 确认并延伸 · Esc 取消" : selected ? `${selected.label}${this.file && selected.ownerPath && selected.ownerPath !== this.file.path ? ` · 引用自 ${selected.ownerPath.split("/").pop()?.replace(/\.md$/, "")}` : ""} · Tab 延伸 · Enter 同级` : `${this.nodes.length} 个节点 · ${this.edges.length} 条连线`);
   }
 
   private onPointerDown(event: PointerEvent) {
+    if (event.pointerType === "touch") this.touchPoints.set(event.pointerId, event);
+    if (event.pointerType === "touch" && this.touchPoints.size >= 2) { this.beginTouchPan(); return; }
     if (event.button !== 0 || this.editor || this.busy) return;
     this.canvas.focus();
     const rect = this.canvas.getBoundingClientRect(), point = { x: event.clientX - rect.left, y: event.clientY - rect.top };
@@ -190,31 +578,52 @@ export class BrainOSGraphView extends ItemView {
       this.selected = node.path;
       const world = this.screenToWorld(point.x, point.y);
       this.gesture = event.altKey && !node.placeholder ? { ...base, kind: "link", node, end: point } : { ...base, kind: "node", node, offset: { x: node.x - world.x, y: node.y - world.y } };
+      if (this.gesture.kind === "node") this.forceLayout.pin(node.path, { x: node.x, y: node.y });
     } else { this.selected = undefined; this.gesture = { ...base, kind: "pan" }; }
+    this.forceLayout.setSelected(this.selected);
+    this.startLayoutAnimation();
     this.canvas.setPointerCapture(event.pointerId); this.draw();
   }
 
   private onPointerMove(event: PointerEvent) {
-    const gesture = this.gesture; if (!gesture || event.pointerId !== gesture.pointer) return;
+    if (event.pointerType === "touch") {
+      this.touchPoints.set(event.pointerId, event);
+      if (this.touchPoints.size >= 2) { event.preventDefault(); this.updateTouchPan(); return; }
+    }
     const rect = this.canvas.getBoundingClientRect(), point = { x: event.clientX - rect.left, y: event.clientY - rect.top };
+    if (!this.gesture) {
+      const nextHover = this.nodeAt(point.x, point.y)?.path;
+      if (nextHover !== this.hovered) { this.hovered = nextHover; this.draw(); }
+      return;
+    }
+    const gesture = this.gesture; if (event.pointerId !== gesture.pointer) return;
     if (Math.hypot(point.x - gesture.start.x, point.y - gesture.start.y) > 4) gesture.moved = true;
     if (!gesture.moved) return;
     this.canvas.addClass("is-dragging");
     if (gesture.kind === "node") {
       const world = this.screenToWorld(point.x, point.y);
       gesture.node.x = world.x + gesture.offset.x; gesture.node.y = world.y + gesture.offset.y;
-      this.plugin.layout.positions[gesture.node.path] = { x: gesture.node.x, y: gesture.node.y };
+      this.forceLayout.movePinned(gesture.node.path, { x: gesture.node.x, y: gesture.node.y });
     } else if (gesture.kind === "pan") {
       this.pan.x += (point.x - gesture.last.x) / this.zoom; this.pan.y += (point.y - gesture.last.y) / this.zoom;
+      this.scheduleLayoutSave();
     } else gesture.end = point;
     gesture.last = point; this.draw();
   }
 
   private onPointerUp(event: PointerEvent) {
+    if (event.pointerType === "touch") {
+      this.touchPoints.delete(event.pointerId);
+      if (this.touchPoints.size < 2) {
+        this.touchPan = undefined;
+        this.canvas.classList.remove("is-touch-panning");
+      }
+      if (!this.gesture || event.pointerId !== this.gesture.pointer) return;
+    }
     const gesture = this.gesture; if (!gesture || event.pointerId !== gesture.pointer) return;
     this.cancelGesture();
     if (!gesture.moved) return;
-    if (gesture.kind === "node") void this.runEdit(() => this.plugin.saveLayout());
+    if (gesture.kind === "node") { this.forceLayout.unpin(gesture.node.path); this.scheduleLayoutSave(); this.startLayoutAnimation(); }
     if (gesture.kind === "link") {
       const rect = this.canvas.getBoundingClientRect(), target = this.nodeAt(event.clientX - rect.left, event.clientY - rect.top);
       if (target && !target.placeholder && target.path !== gesture.node.path) void this.connect(gesture.node, target);
@@ -222,6 +631,8 @@ export class BrainOSGraphView extends ItemView {
   }
 
   private cancelGesture() {
+    const gesture = this.gesture;
+    if (gesture?.kind === "node") this.forceLayout.unpin(gesture.node.path);
     const pointer = this.gesture?.pointer;
     this.gesture = undefined;
     if (pointer !== undefined && this.canvas.hasPointerCapture(pointer)) this.canvas.releasePointerCapture(pointer);
@@ -229,103 +640,195 @@ export class BrainOSGraphView extends ItemView {
     if (!this.closed) this.draw();
   }
 
+  private onPointerCancel(event: PointerEvent) {
+    if (event.pointerType === "touch") this.touchPoints.delete(event.pointerId);
+    this.touchPan = undefined;
+    this.canvas?.classList.remove("is-touch-panning");
+    this.cancelGesture();
+  }
+
+  private beginTouchPan() {
+    const points = [...this.touchPoints.values()];
+    if (points.length < 2) return;
+    if (this.gesture) this.cancelGesture();
+    const first = points[0], second = points[1], rect = this.canvas.getBoundingClientRect();
+    const midpoint = { x: (first.clientX + second.clientX) / 2 - rect.left, y: (first.clientY + second.clientY) / 2 - rect.top };
+    this.touchPan = {
+      center: midpoint,
+      start: this.screenToWorld(midpoint.x, midpoint.y),
+      distance: Math.max(1, Math.hypot(first.clientX - second.clientX, first.clientY - second.clientY)),
+      zoom: this.zoom,
+    };
+    this.canvas.classList.add("is-touch-panning");
+  }
+
+  private updateTouchPan() {
+    if (!this.touchPan) { this.beginTouchPan(); return; }
+    const points = [...this.touchPoints.values()];
+    if (points.length < 2) return;
+    const first = points[0], second = points[1], rect = this.canvas.getBoundingClientRect();
+    const midpoint = { x: (first.clientX + second.clientX) / 2 - rect.left, y: (first.clientY + second.clientY) / 2 - rect.top };
+    const distance = Math.max(1, Math.hypot(first.clientX - second.clientX, first.clientY - second.clientY));
+    const nextZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, this.touchPan.zoom * distance / this.touchPan.distance));
+    this.zoom = nextZoom;
+    this.pan = { x: (midpoint.x - this.canvas.clientWidth / 2) / nextZoom - this.touchPan.start.x, y: (midpoint.y - this.canvas.clientHeight / 2) / nextZoom - this.touchPan.start.y };
+    this.scheduleLayoutSave();
+    this.draw();
+  }
+
   private onWheel(event: WheelEvent) {
     event.preventDefault(); if (this.editor) return;
-    const rect = this.canvas.getBoundingClientRect(), x = event.clientX - rect.left, y = event.clientY - rect.top;
-    const before = this.screenToWorld(x, y);
-    this.zoom = Math.max(.2, Math.min(3, this.zoom * (event.deltaY > 0 ? .9 : 1.1)));
-    const after = this.screenToWorld(x, y); this.pan.x += after.x - before.x; this.pan.y += after.y - before.y; this.draw();
+    const rect = this.canvas.getBoundingClientRect();
+    this.zoomAnchor = { x: event.clientX - rect.left, y: event.clientY - rect.top };
+    const delta = event.deltaY * (event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? this.canvas.clientHeight : 1);
+    this.targetZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, (this.targetZoom ?? this.zoom) * Math.exp(-delta * .002)));
+    this.animateZoom();
+  }
+
+  private animateZoom() {
+    if (this.closed || this.cameraFrame !== undefined) return;
+    this.cameraFrame = requestAnimationFrame(() => {
+      this.cameraFrame = undefined;
+      if (this.closed || this.targetZoom === undefined || !this.zoomAnchor) return;
+      const before = this.screenToWorld(this.zoomAnchor.x, this.zoomAnchor.y);
+      this.zoom += (this.targetZoom - this.zoom) * .25;
+      if (Math.abs(this.targetZoom - this.zoom) < .0001) { this.zoom = this.targetZoom; this.targetZoom = undefined; }
+      const after = this.screenToWorld(this.zoomAnchor.x, this.zoomAnchor.y);
+      this.pan.x += after.x - before.x; this.pan.y += after.y - before.y;
+      this.draw(); this.scheduleLayoutSave();
+      if (this.targetZoom !== undefined) this.animateZoom();
+    });
   }
 
   private onDoubleClick(event: MouseEvent) {
     if (this.editor || this.busy) return;
     const rect = this.canvas.getBoundingClientRect(), x = event.clientX - rect.left, y = event.clientY - rect.top;
     const node = this.nodeAt(x, y);
-    if (node) void this.app.workspace.openLinkText(node.openPath, "", false);
+    if (node?.nodeId) void this.beginEdit(node);
+    else if (node?.openPath) void this.app.workspace.openLinkText(node.openPath, "", false);
     else void this.beginCreate(this.screenToWorld(x, y));
   }
 
   private onKeyDown(event: KeyboardEvent) {
+    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "f" && !this.editor) {
+      event.preventDefault(); this.toggleSearch(true); return;
+    }
     if (event.isComposing || event.metaKey || event.ctrlKey || event.altKey || this.editor || this.busy) return;
+    if (event.key.toLowerCase() === "f") { event.preventDefault(); this.fitToView(); return; }
     const node = this.nodes.find(item => item.path === this.selected);
     if (event.key === "Tab" || event.key === "Enter") { event.preventDefault(); void this.createRelative(event.key === "Tab"); }
     else if (event.key === " " && node) { event.preventDefault(); void this.beginEdit(node); }
     else if ((event.key === "Delete" || event.key === "Backspace") && node) { event.preventDefault(); this.removeNode(node); }
-    else if (event.key === "Escape") { this.selected = undefined; this.draw(); }
+    else if (event.key === "Escape") { this.selected = undefined; this.forceLayout.setSelected(undefined); this.draw(); }
   }
 
   private editingThought(node?: GraphNode): string | undefined {
     if (this.thoughtPath) return this.thoughtPath;
     if (node?.thoughts.length === 1) return node.thoughts[0];
     if (this.snapshot.thoughts.length === 1) return this.snapshot.thoughts[0].path;
-    if (node) new Notice("节点属于多个思考，请先在工具栏选择要修改的思考");
+    if (node) new Notice("节点属于多个思考，请先在图谱设置中选择要修改的思考");
   }
 
   private async createRelative(child: boolean) {
     const node = this.nodes.find(item => item.path === this.selected);
     if (!node) { await this.beginCreate(this.screenToWorld(this.canvas.clientWidth / 2, this.canvas.clientHeight / 2)); return; }
-    const thought = this.editingThought(node); if (!thought) return;
+    const thought = this.file?.path ?? this.editingThought(node);
+    if (this.source === "vault" || !thought) { new Notice("请先打开一个思考文件，节点会保存在这份文件中"); return; }
     if (node.placeholder) { await this.beginCreate({ x: node.x, y: node.y }, undefined, thought); return; }
-    const parent = child ? node.path : this.edges.find(edge => edge.to === node.path && edge.thoughts.includes(thought))?.from;
+    const parent = child ? node.path : this.edges.find(edge => edge.to === node.path && (!thought || edge.thoughts.includes(thought)))?.from;
     await this.beginCreate({ x: node.x + (child ? 150 : 0), y: node.y + (child ? 0 : 100) }, parent, thought);
   }
 
   private async beginCreate(point: Point, parent?: string, target = this.editingThought()) {
     if (this.busy) return;
+    target = this.file?.path ?? target;
+    if (this.source === "vault" || !target) { new Notice("请先打开一个思考文件，或运行「新建思考」命令"); return; }
     this.closeEditor();
-    const form = this.openEditor(point, parent ? "延伸节点" : "新建节点");
-    form.createDiv({ cls: "brainos-node-editor-target", text: target ? `保存到：${this.snapshot.thoughts.find(thought => thought.path === target)?.title ?? target}` : "保存时自动创建一个新的思考文件" });
-    const title = form.createEl("input", { placeholder: "节点标题", attr: { "aria-label": "节点标题", required: "" } });
-    const body = form.createEl("textarea", { placeholder: "笔记内容（Markdown，可选）", attr: { "aria-label": "节点内容" } });
-    const controls = form.createDiv({ cls: "brainos-node-editor-actions" });
-    const cancel = controls.createEl("button", { text: "取消", attr: { type: "button" } }); cancel.onclick = () => this.closeEditor();
-    const save = controls.createEl("button", { text: "创建", cls: "mod-cta", attr: { type: "submit" } });
+    const draft: GraphNode = { path: `draft:${crypto.randomUUID()}`, label: "", openPath: "", degree: parent ? 1 : 0, thoughts: target ? [target] : [], kind: "note", ...point };
+    this.draftNode = draft; this.draftParent = parent;
+    this.filterSnapshot();
+    this.selected = draft.path;
+    this.forceLayout.sync(this.nodes, this.edges, this.plugin.layout.positions);
+    this.forceLayout.pin(draft.path, point);
+    this.forceLayout.setSelected(draft.path);
+    const form = this.contentEl.createEl("form", { cls: "brainos-node-title-editor" }); this.editor = form;
+    const title = form.createEl("input", { cls: "brainos-node-title-input", placeholder: "节点标题", attr: { "aria-label": "节点标题", autocomplete: "off", required: "" } });
+    let continueAfterSave = false;
+    title.addEventListener("compositionstart", () => { this.composing = true; });
+    title.addEventListener("compositionend", () => { this.composing = false; });
+    title.oninput = () => {
+      title.style.width = `${Math.max(110, Math.min(420, Array.from(title.value).length * 15 + 28))}px`;
+    };
+    form.onkeydown = event => {
+      event.stopPropagation();
+      const action = titleKeyAction(event);
+      if (action === "none") return;
+      event.preventDefault();
+      if (action === "cancel") { this.closeEditor(); this.draw(); return; }
+      if (this.composing || !title.value.trim()) return;
+      continueAfterSave = action === "continue";
+      form.requestSubmit();
+    };
     form.onsubmit = event => {
       event.preventDefault();
-      const label = title.value.trim(); if (!label || this.busy) return;
-      save.disabled = true;
-      void this.runEdit(async () => {
-        let thought = target;
-        // Check the existing state before creating a note; a corrupt thought must not orphan new content.
-        if (thought) {
-          const file = this.app.vault.getAbstractFileByPath(thought);
-          if (!(file instanceof TFile) || !parseThoughtState(await this.app.vault.read(file))) throw new Error("思考状态缺失或损坏，请先修复 brainos-state");
-        } else thought = (await createThought(this.app, label, this.plugin.layout.settings.noteFolder)).path;
-        const atom = await createAtom(this.app, label, body.value, this.plugin.layout.settings.noteFolder);
-        try {
-          await editThought(this.app, thought, state => addRoute(state, parent ? [parent, atom.path] : [atom.path], label));
-        } catch (error) {
-          new Notice(`新笔记已保留在 ${atom.path}，但未加入思考`); throw error;
-        }
-        this.plugin.layout.positions[atom.path] = point;
-        await this.plugin.saveLayout();
-        this.thoughtPath = thought; this.selected = atom.path;
-        this.closeEditor(); await this.refresh(); this.plugin.refreshViews();
-      }).finally(() => { save.disabled = false; });
+      const label = title.value.trim();
+      if (!label || this.busy || this.composing) return;
+      title.disabled = true;
+      const shouldContinue = continueAfterSave;
+      void (async () => {
+        let committed = false;
+        await this.runEdit(async () => {
+          const parentNode = parent ? this.nodes.find(node => node.path === parent) : undefined;
+          const key = await createThoughtNode(this.app, target!, label, "", parentNode ? { key: parentNode.path, title: parentNode.label } : undefined);
+          this.plugin.layout.positions[key] = { x: draft.x, y: draft.y };
+          if (parent) this.plugin.recordSessionStep(parent, target);
+          this.plugin.recordSessionStep(key, target);
+          await this.plugin.saveLayout();
+          this.closeEditor(); this.selected = key;
+          this.thoughtPath = target!;
+          await this.refresh(); this.plugin.refreshViews();
+          this.canvas.focus(); committed = true;
+        });
+        title.disabled = false;
+        if (!committed && this.editor === form) title.focus();
+        if (committed && shouldContinue) await this.createRelative(true);
+      })();
     };
-    title.focus();
+    title.onblur = () => requestAnimationFrame(() => {
+      if (this.editor !== form || this.busy || this.composing) return;
+      if (title.value.trim()) form.requestSubmit();
+      else { this.closeEditor(); this.draw(); }
+    });
+    this.positionDraftEditor(); this.startLayoutAnimation(); this.draw(); title.focus();
+  }
+
+  private positionDraftEditor() {
+    if (!this.draftNode || !this.editor) return;
+    const point = this.worldToScreen(this.draftNode);
+    const radius = nodeScreenRadius(this.draftNode.degree, this.zoom, this.graphOptions.nodeSizeMultiplier);
+    this.editor.style.left = `${this.canvas.offsetLeft + point.x}px`;
+    this.editor.style.top = `${this.canvas.offsetTop + point.y + radius + 6}px`;
   }
 
   private async beginEdit(node: GraphNode) {
-    if (this.busy) return;
-    const file = this.app.vault.getAbstractFileByPath(node.openPath);
-    if (!(file instanceof TFile)) { new Notice("节点没有对应的 Markdown 笔记"); return; }
+    if (this.busy || node.placeholder) return;
+    if (!node.nodeId) { if (node.openPath) await this.app.workspace.openLinkText(node.openPath, this.file?.path ?? "", false); return; }
     await this.runEdit(async () => {
-      const original = await this.app.vault.read(file);
+      const original = await readThoughtNode(this.app, node.path);
       if (this.closed) return;
       this.closeEditor();
-      const form = this.openEditor(node, `编辑：${node.label}`);
-      const body = form.createEl("textarea", { cls: "brainos-node-editor-document", attr: { "aria-label": "笔记 Markdown" } }); body.value = original;
+      const form = this.openEditor(node, "编辑节点");
+      if (this.file && original.file.path !== this.file.path) form.createDiv({ cls: "brainos-node-editor-target", text: `引用自 ${original.file.basename}，编辑会更新来源节点` });
+      const title = form.createEl("input", { type: "text", attr: { "aria-label": "节点标题" } }); title.value = original.node.title;
+      const body = form.createEl("textarea", { cls: "brainos-node-editor-document", attr: { "aria-label": "节点正文 Markdown" } }); body.value = original.node.body;
+      this.addMarkdownPreviewToggle(form, body, original.file.path);
       const controls = form.createDiv({ cls: "brainos-node-editor-actions" });
       const cancel = controls.createEl("button", { text: "取消", attr: { type: "button" } }); cancel.onclick = () => this.closeEditor();
       const save = controls.createEl("button", { text: "保存", cls: "mod-cta", attr: { type: "submit" } });
       form.onsubmit = event => {
         event.preventDefault(); if (this.busy) return; save.disabled = true;
         void this.runEdit(async () => {
-          await this.app.vault.process(file, current => {
-            if (current !== original) throw new Error("笔记已在其他位置修改。请取消并重新打开编辑，避免覆盖内容");
-            return body.value;
-          });
+          await editThoughtNode(this.app, node.path, title.value, body.value, original.node);
           this.closeEditor(); await this.refresh(); this.plugin.refreshViews();
         }).finally(() => { save.disabled = false; });
       };
@@ -333,12 +836,32 @@ export class BrainOSGraphView extends ItemView {
     });
   }
 
+  async openReferencePicker() {
+    const thought = this.file?.path ?? this.editingThought();
+    if (!thought || this.source === "vault") { new Notice("请先打开一个思考文件"); return; }
+    await this.runEdit(async () => {
+      const snapshot = await buildSnapshot(this.app);
+      const current = this.nodes.filter(node => node.nodeId);
+      const byKey = new Map([...snapshot.nodes, ...current].filter(node => node.nodeId).map(node => [node.path, node]));
+      const parent = this.nodes.find(node => node.path === this.selected && node.nodeId);
+      new NodeReferenceModal(this.app, [...byKey.values()], node => {
+        void this.runEdit(async () => {
+          await referenceThoughtNode(this.app, thought, node, parent);
+          this.selected = node.path; this.plugin.recordSessionStep(node.path, thought);
+          await this.refresh(); this.plugin.refreshViews(); this.canvas.focus();
+        });
+      }).open();
+    });
+  }
+
   private openEditor(point: Point, heading: string): HTMLFormElement {
     const form = this.contentEl.createEl("form", { cls: "brainos-node-editor" }); this.editor = form;
     form.createEl("strong", { text: heading });
-    const screen = this.worldToScreen(point);
-    form.style.left = `${Math.max(8, Math.min(this.contentEl.clientWidth - 348, screen.x - 160))}px`;
-    form.style.top = `${Math.max(60, Math.min(this.contentEl.clientHeight - 340, screen.y + 65))}px`;
+    const screen = Number.isFinite(point.x) && Number.isFinite(point.y) ? this.worldToScreen(point)
+      : { x: this.contentEl.clientWidth / 2, y: this.contentEl.clientHeight / 2 };
+    const width = Math.min(320, this.contentEl.clientWidth - 16);
+    form.style.left = `${Math.max(8, Math.min(this.contentEl.clientWidth - width - 8, screen.x - width / 2))}px`;
+    form.style.top = `${Math.max(8, Math.min(this.contentEl.clientHeight - 440, screen.y + 30))}px`;
     form.onkeydown = event => {
       event.stopPropagation();
       if (event.key === "Escape" && !this.busy) { event.preventDefault(); this.closeEditor(); }
@@ -348,8 +871,47 @@ export class BrainOSGraphView extends ItemView {
   }
 
   private closeEditor() {
+    this.editorComponent?.unload(); this.editorComponent = undefined;
     this.editor?.remove(); this.editor = undefined;
+    if (this.draftNode) {
+      const path = this.draftNode.path;
+      this.forceLayout.unpin(path);
+      this.draftNode = undefined; this.draftParent = undefined;
+      this.nodes = this.nodes.filter(node => node.path !== path);
+      this.edges = this.edges.filter(edge => edge.from !== path && edge.to !== path);
+      if (this.selected === path) this.selected = undefined;
+      if (!this.closed) this.filterSnapshot();
+    }
+    this.composing = false;
     if (!this.closed) this.canvas?.focus();
+  }
+
+  /** Add an in-place Markdown edit/preview switch without leaving graph context. */
+  private addMarkdownPreviewToggle(form: HTMLFormElement, body: HTMLTextAreaElement, sourcePath: string) {
+    const preview = form.createDiv({ cls: "brainos-node-editor-preview" });
+    preview.style.display = "none";
+    const controls = form.createDiv({ cls: "brainos-node-editor-actions" });
+    const toggle = controls.createEl("button", { text: "预览", attr: { type: "button" } });
+    toggle.onclick = async () => {
+      const showing = preview.style.display !== "none";
+      if (showing) {
+        preview.style.display = "none";
+        body.style.display = "";
+        toggle.setText("预览");
+        this.editorComponent?.unload();
+        this.editorComponent = undefined;
+        return;
+      }
+      preview.empty();
+      const component = new Component();
+      component.load();
+      this.editorComponent?.unload();
+      this.editorComponent = component;
+      await MarkdownRenderer.render(this.app, body.value, preview, sourcePath, component);
+      body.style.display = "none";
+      preview.style.display = "block";
+      toggle.setText("编辑");
+    };
   }
 
   private async runEdit(action: () => Promise<void>) {
@@ -360,19 +922,26 @@ export class BrainOSGraphView extends ItemView {
   }
 
   private async connect(from: GraphNode, to: GraphNode) {
-    const thought = this.editingThought(from); if (!thought) return;
-    if (this.edges.some(edge => edge.from === from.path && edge.to === to.path && edge.thoughts.includes(thought))) return;
+    const thought = this.file?.path ?? this.editingThought(from);
+    if (this.source === "vault" || !thought) { new Notice("请在思考文件内组合节点；全库图谱仅用于查看笔记双链"); return; }
+    if (from.placeholder || to.placeholder) return;
     await this.runEdit(async () => {
-      await editThought(this.app, thought, state => addRoute(state, [from.path, to.path], `${from.label} → ${to.label}`));
+      await linkThoughtNodes(this.app, thought, from, to);
+      this.plugin.recordSessionStep(from.path, thought); this.plugin.recordSessionStep(to.path, thought);
       await this.refresh(); this.plugin.refreshViews();
     });
   }
 
   private removeNode(node: GraphNode) {
-    if (node.placeholder) { new Notice("这是空思考的入口；可以延伸新节点或打开思考文件"); return; }
-    const thought = this.editingThought(node); if (!thought) return;
-    new RemoveNodeModal(this.app, node.label, () => this.runEdit(async () => {
-      await editThought(this.app, thought, state => splitRoutes(state, node.path));
+    if (this.source === "vault") {
+      this.plugin.layout.graph.hiddenPaths.push(node.path);
+      this.selected = undefined; void this.plugin.saveLayout(); this.filterSnapshot(); this.draw(); return;
+    }
+    if (node.placeholder) return;
+    const thought = this.file?.path ?? this.editingThought(node); if (!thought) return;
+    const owned = splitNodeKey(node.path)?.file === thought;
+    new RemoveNodeModal(this.app, node.label, owned, () => this.runEdit(async () => {
+      await removeThoughtNode(this.app, thought, node.path);
       this.selected = undefined; await this.refresh(); this.plugin.refreshViews();
     })).open();
   }
@@ -382,11 +951,12 @@ export class BrainOSGraphView extends ItemView {
     const rect = this.canvas.getBoundingClientRect(), x = event.clientX - rect.left, y = event.clientY - rect.top;
     const node = this.nodeAt(x, y), menu = new Menu();
     if (node) {
-      this.selected = node.path; this.draw();
-      menu.addItem(item => item.setTitle("编辑笔记").setIcon("pencil").onClick(() => void this.beginEdit(node)));
-      menu.addItem(item => item.setTitle("打开笔记").setIcon("file-text").onClick(() => void this.app.workspace.openLinkText(node.openPath, "", false)));
+      this.selected = node.path; this.forceLayout.setSelected(this.selected); this.startLayoutAnimation(); this.draw();
+      menu.addItem(item => item.setTitle("编辑节点").setIcon("pencil").onClick(() => void this.beginEdit(node)));
+      menu.addItem(item => item.setTitle("打开来源 Markdown").setIcon("file-text").onClick(() => void this.app.workspace.openLinkText(node.openPath, "", false)));
+      menu.addItem(item => item.setTitle("引用已有节点…").setIcon("link").onClick(() => void this.openReferencePicker()));
       menu.addItem(item => item.setTitle("延伸节点（Tab）").setIcon("git-branch").onClick(() => void this.createRelative(true)));
-      menu.addItem(item => item.setTitle("从当前思考移除…").setIcon("unlink").onClick(() => this.removeNode(node)));
+      menu.addItem(item => item.setTitle(this.source === "vault" ? "从图谱隐藏" : node.ownerPath === this.file?.path ? "删除此节点…" : "从当前思考移除引用…").setIcon("unlink").onClick(() => this.removeNode(node)));
     } else {
       menu.addItem(item => item.setTitle("在这里新建节点").setIcon("plus").onClick(() => void this.beginCreate(this.screenToWorld(x, y))));
       const byPath = new Map(this.nodes.map(item => [item.path, item]));
@@ -397,9 +967,13 @@ export class BrainOSGraphView extends ItemView {
         return Math.hypot(x - p.x - t * dx, y - p.y - t * dy) < 7;
       });
       if (edge) menu.addItem(item => item.setTitle("断开此连线").setIcon("unlink").onClick(() => {
+        if (this.source === "vault") {
+          void this.runEdit(async () => { await removeVaultLink(this.app, edge.from, edge.to); await this.refresh(); this.plugin.refreshViews(); });
+          return;
+        }
         const thought = this.thoughtPath || (edge.thoughts.length === 1 ? edge.thoughts[0] : undefined);
         if (!thought) { new Notice("连线属于多个思考，请先选择要修改的思考"); return; }
-        void this.runEdit(async () => { await editThought(this.app, thought, state => splitRoutes(state, undefined, edge)); await this.refresh(); this.plugin.refreshViews(); });
+        void this.runEdit(async () => { await unlinkThoughtNodes(this.app, thought, edge.from, edge.to); await this.refresh(); this.plugin.refreshViews(); });
       }));
     }
     menu.showAtMouseEvent(event);
@@ -407,13 +981,28 @@ export class BrainOSGraphView extends ItemView {
 }
 
 class RemoveNodeModal extends Modal {
-  constructor(app: BrainOSPlugin["app"], private label: string, private remove: () => Promise<void>) { super(app); }
+  constructor(app: BrainOSPlugin["app"], private label: string, private owned: boolean, private remove: () => Promise<void>) { super(app); }
   onOpen() {
     this.titleEl.setText(`移除「${this.label}」？`);
-    this.contentEl.createEl("p", { text: "仅移除当前思考中的节点引用及相邻连线。原 Markdown 笔记及其他思考不变；不会自动连接前后节点。" });
+    this.contentEl.createEl("p", { text: this.owned ? "删除本思考中的节点正文及相邻关系。其他思考对它的引用会显示为失效；不会删除思考文件。" : "仅移除本思考中的引用及相邻关系，来源节点的标题和正文保持不变。" });
     new Setting(this.contentEl)
       .addButton(button => button.setButtonText("取消").onClick(() => this.close()))
-      .addButton(button => button.setButtonText("移除引用").setWarning().onClick(() => { this.close(); void this.remove(); }));
+      .addButton(button => button.setButtonText(this.owned ? "删除节点" : "移除引用").setWarning().onClick(() => { this.close(); void this.remove(); }));
   }
   onClose() { this.contentEl.empty(); }
+}
+
+class NodeReferenceModal extends SuggestModal<GraphNode> {
+  constructor(app: BrainOSPlugin["app"], private nodes: GraphNode[], private choose: (node: GraphNode) => void) {
+    super(app); this.setPlaceholder("搜索已有节点，引用到当前思考…");
+  }
+  getSuggestions(query: string) {
+    const tokens = query.trim().toLocaleLowerCase().split(/\s+/);
+    return this.nodes.filter(node => tokens.every(token => `${node.label} ${node.ownerPath}`.toLocaleLowerCase().includes(token))).slice(0, 50);
+  }
+  renderSuggestion(node: GraphNode, el: HTMLElement) {
+    el.createDiv({ text: node.label });
+    el.createDiv({ cls: "brainos-node-editor-target", text: node.ownerPath ?? "" });
+  }
+  onChooseSuggestion(node: GraphNode) { this.choose(node); }
 }

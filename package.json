@@ -6,7 +6,8 @@
   "scripts": {
     "build": "npm run typecheck && node esbuild.mjs",
     "typecheck": "tsc --noEmit",
-    "dev": "node esbuild.mjs --watch"
+    "dev": "node esbuild.mjs --watch",
+    "test": "node --test tests/*.test.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",
