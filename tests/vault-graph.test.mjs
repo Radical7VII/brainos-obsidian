@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { build } from 'esbuild';
+import {installNativeFileManager} from './native-file-manager.mjs';
 const bundle = await build({
   stdin: { contents: 'export * from "./src/vault-graph"; export * from "./src/graph-options"; export * from "./src/thoughts"; export {TFile} from "obsidian";', resolveDir: process.cwd() },
   bundle: true, write: false, format: 'esm', platform: 'node', logLevel: 'silent',
@@ -23,6 +24,7 @@ function fixture() {
       createFolder: async path=>map.set(path,{path}), create:async(path,text)=>{const f=new TFile(path);map.set(path,f);f.text=text;return f;} },
     metadataCache:{resolvedLinks:{'A.md':{'B.md':4,'image.png':1},'B.md':{'A.md':2,'folder/C.md':1}},unresolvedLinks:{'A.md':{'Missing':3}},getFileCache:f=>cache[f.path]??{}},
   };
+  installNativeFileManager(app);
   return {app,files};
 }
 test('vault graph uses cached links, folds reference counts and retains direction',()=>{
@@ -72,11 +74,16 @@ test('persisted graph options are bounded and malformed values use defaults',()=
   assert.equal(value.source,'vault');assert.equal(value.display.nodeSizeMultiplier,1);assert.equal(value.display.lineSizeMultiplier,5);
   assert.equal(value.forces.repel,0);assert.equal(value.filter.localDepth,5);assert.deepEqual(value.hiddenPaths,['a.md']);
 });
-test('new thoughts use an ordinary MD default name and never silently add a number',async()=>{
+test('new thoughts automatically skip occupied names without changing existing files',async()=>{
   const {app}=fixture();
   const file=await createThought(app,'','BrainOS/Thoughts');
   assert.equal(file.path,'BrainOS/Thoughts/未命名思考.md');
-  await assert.rejects(()=>createThought(app,'未命名思考','BrainOS/Thoughts'),/已有文件/);
+  const second=await createThought(app,'未命名思考','BrainOS/Thoughts');
+  const third=await createThought(app,'未命名思考','BrainOS/Thoughts');
+  assert.equal(second.path,'BrainOS/Thoughts/未命名思考 1.md');
+  assert.equal(third.path,'BrainOS/Thoughts/未命名思考 2.md');
+  assert.equal(app.vault.getAbstractFileByPath(file.path),file);
+  assert.equal(file.text,'');
 });
 
 test('a bound new thought renders before metadata indexing and does not read other thought files',async()=>{

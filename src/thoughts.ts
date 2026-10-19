@@ -1,4 +1,4 @@
-import { App, normalizePath } from "obsidian";
+import { App, TFile, TFolder, normalizePath } from "obsidian";
 
 export type Point = { x: number; y: number };
 export type ThoughtStep = Record<string, unknown>;
@@ -57,15 +57,15 @@ export async function ensureFolder(app: App, folder: string) {
   }
 }
 
-export class ThoughtFileExistsError extends Error {
-  constructor(readonly path: string) { super("这个路径已有文件，请使用其他名称或文件夹"); }
-}
-
 export async function createThought(app: App, title: string, folder: string) {
   const normalized = targetFolder(folder);
   await ensureFolder(app, normalized);
-  const name = title.trim() || "未命名思考";
-  const path = normalizePath((normalized ? normalized + "/" : "") + nodeTitle(name) + ".md");
-  if (app.vault.getAbstractFileByPath(path)) throw new ThoughtFileExistsError(path);
-  return app.vault.create(path, "");
+  const parent = normalized ? app.vault.getFolderByPath(normalized) : app.vault.getRoot();
+  if (!parent) throw new Error("新思考存放文件夹不存在");
+  // Obsidian's native creation flow handles filename normalization and collisions.
+  // This internal API is not included in the public Obsidian type declarations.
+  const fileManager = app.fileManager as typeof app.fileManager & {
+    createNewMarkdownFile(parent: TFolder, name?: string, content?: string): Promise<TFile>;
+  };
+  return fileManager.createNewMarkdownFile(parent, title.trim() || "未命名思考", "");
 }

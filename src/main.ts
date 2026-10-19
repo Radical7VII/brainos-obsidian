@@ -1,8 +1,8 @@
 import {
-  App, MarkdownView, Modal, Notice, Plugin, PluginSettingTab, Setting, TFile, WorkspaceLeaf,
+  App, MarkdownView, Notice, Plugin, PluginSettingTab, Setting, TFile, WorkspaceLeaf,
 } from "obsidian";
 import { BrainOSGraphView, VIEW_TYPE } from "./graph-view";
-import { DEFAULT_NOTE_FOLDER, ThoughtFileExistsError, createThought } from "./thoughts";
+import { DEFAULT_NOTE_FOLDER, createThought } from "./thoughts";
 import { GraphOptions, defaultGraphOptions, loadGraphOptions } from "./graph-options";
 import { BrainOSAIProvider, UnconfiguredAIProvider } from "./ai";
 import { MindViewMode } from "./mind-view-mode";
@@ -174,9 +174,6 @@ export default class BrainOSPlugin extends Plugin {
       return true;
     } catch (error) {
       new Notice(error instanceof Error ? error.message : String(error));
-      if (title === "未命名思考" && error instanceof ThoughtFileExistsError) {
-        new ThoughtNameModal(this.app, this).open();
-      }
       return false;
     } finally { this.creatingThought = false; }
   }
@@ -279,30 +276,6 @@ function isViewport(value: unknown): value is Viewport {
     && Math.abs(value.x as number) <= 1e7 && Math.abs(value.y as number) <= 1e7
     && Number.isFinite(value.zoom)
     && (value.zoom as number) > 0 && (value.zoom as number) <= 100;
-}
-
-class ThoughtNameModal extends Modal {
-  constructor(app: App, private plugin: BrainOSPlugin) { super(app); }
-  onOpen() {
-    this.titleEl.setText("已有未命名思考，为新思考取个名字");
-    const form = this.contentEl.createEl("form");
-    const input = form.createEl("input", { type: "text", placeholder: "思考名称", attr: { "aria-label": "思考名称", required: "" } });
-    const create = form.createEl("button", { text: "创建", cls: "mod-cta", attr: { type: "submit" } });
-    form.onsubmit = event => {
-      event.preventDefault();
-      const title = input.value.trim();
-      if (!title) return;
-      if (title === "未命名思考") { new Notice("请为新思考使用另一个名称"); return; }
-      if (create.disabled) return;
-      create.disabled = true;
-      void this.plugin.createNewThought(title).then(created => {
-        if (created) this.close();
-        else { create.disabled = false; input.focus(); }
-      });
-    };
-    input.focus();
-  }
-  onClose() { this.contentEl.empty(); }
 }
 
 class BrainOSSettingTab extends PluginSettingTab {

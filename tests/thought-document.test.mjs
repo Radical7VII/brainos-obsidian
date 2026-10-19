@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {build} from 'esbuild';
+import {installNativeFileManager} from './native-file-manager.mjs';
 const bundle=await build({stdin:{contents:'export * from "./src/thought-document";export * from "./src/thought-store";export * from "./src/thoughts";export {TFile} from "obsidian";',resolveDir:process.cwd()},bundle:true,write:false,format:'esm',platform:'node',logLevel:'silent',plugins:[{name:'obsidian',setup(b){
   b.onResolve({filter:/^obsidian$/},()=>({path:'mock',namespace:'test'}));
   b.onLoad({filter:/.*/,namespace:'test'},()=>({loader:'js',contents:`export class TFile{constructor(path){this.path=path;this.basename=path.split('/').pop().replace(/\\.md$/,'');this.extension='md';}}export const normalizePath=p=>p.replace(/\\/+/g,'/');`}));
@@ -13,6 +14,7 @@ function fixture(){
   const files=new Map(),content=new Map(),created=[];const writes=[];
   const add=(path,text)=>{const file=new TFile(path);files.set(path,file);content.set(path,text);return file;};
   const app={vault:{getAbstractFileByPath:path=>files.get(path),getMarkdownFiles:()=>[...files.values()].filter(file=>file instanceof TFile),cachedRead:async file=>content.get(file.path),read:async file=>content.get(file.path),createFolder:async path=>files.set(path,{path}),create:async(path,text)=>{assert.ok(!files.has(path));created.push(path);return add(path,text);},process:async(file,edit)=>{const next=edit(content.get(file.path));content.set(file.path,next);writes.push(file.path);}},metadataCache:{getFileCache:file=>({frontmatter:content.get(file.path)?.includes('brainos_type: thought-file')?{brainos_type:'thought-file'}:{}}),getFirstLinkpathDest:(target,source)=>files.get(target)||files.get(target+'.md')||files.get(source.slice(0,source.lastIndexOf('/')+1)+target+'.md')}};
+  installNativeFileManager(app);
   return {app,files,content,created,writes,add};
 }
 
@@ -62,7 +64,9 @@ test('new thoughts are empty Markdown at the exact configured folder or vault ro
   assert.deepEqual(f.created,['未命名思考.md','我的思考/设计.md']);
   assert.equal(f.content.get(root.path),'');assert.equal(f.content.get(custom.path),'');
   assert.ok(!f.files.has('BrainOS'));assert.ok(!f.files.has('我的思考/Thoughts'));
-  await assert.rejects(()=>createThought(f.app,'设计','我的思考'),/已有文件/);
+  const duplicate=await createThought(f.app,'设计','我的思考');
+  assert.equal(duplicate.path,'我的思考/设计 1.md');
+  assert.equal(f.content.get(custom.path),'');
   await assert.rejects(()=>createThought(f.app,'无效','../外部'),/笔记库内/);
 });
 test('same-name creation reuses one node while preserving every visit and body',async()=>{

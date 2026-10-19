@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {build} from 'esbuild';
+import {installNativeFileManager} from './native-file-manager.mjs';
 const bundled=await build({
   stdin:{contents:'export {default as BrainOSPlugin} from "./src/main";export {Modal,TFile,MarkdownView} from "obsidian";',resolveDir:process.cwd()},
   bundle:true,write:false,format:'esm',platform:'node',logLevel:'silent',plugins:[{name:'obsidian-test',setup(b){
@@ -31,7 +32,8 @@ function fixture(){
     metadataCache:{on:()=>({})},
     workspace:{getActiveFile:()=>null,on:()=>({}),onLayoutReady:()=>{},getLeavesOfType:()=>[],getLeaf:()=>{tabs++;return leaf;},revealLeaf:async()=>{}},
   };
-  return {plugin,files,states,get tabs(){return tabs;}};
+  const nativeCalls=installNativeFileManager(plugin.app);
+  return {plugin,files,states,nativeCalls,get tabs(){return tabs;}};
 }
 test('new thought command creates an ordinary default MD and opens it directly in mind view',async()=>{
   const f=fixture();await f.plugin.onload();
@@ -40,11 +42,16 @@ test('new thought command creates an ordinary default MD and opens it directly i
   await f.plugin.createNewThought();
   const file=f.files.get('未命名思考.md');assert.ok(file instanceof TFile);
   assert.equal(file.text,'');
+  assert.deepEqual(f.nativeCalls,[{parent:'',name:'未命名思考',content:''}]);
   assert.deepEqual(f.states,[{type:'brainos-graph-view',state:{file:file.path},active:true}]);assert.equal(f.tabs,1);
   const original=file.text,dialogs=Modal.opened;
+  globalThis.lastNotice=undefined;
   await f.plugin.createNewThought();
-  assert.equal(f.files.get(file.path).text,original);assert.equal(f.tabs,1);
-  assert.equal(Modal.opened,dialogs+1);assert.equal([...f.files.keys()].filter(p=>p.endsWith('.md')).length,1);
+  assert.equal(f.files.get(file.path).text,original);assert.equal(f.tabs,2);
+  assert.ok(f.files.has('未命名思考 1.md'));
+  assert.equal(f.states[1].state.file,'未命名思考 1.md');
+  assert.equal(Modal.opened,dialogs);assert.equal(globalThis.lastNotice,undefined);
+  assert.equal([...f.files.keys()].filter(p=>p.endsWith('.md')).length,2);
   await f.plugin.createNewThought('第二个方向');
   assert.ok(f.files.has('第二个方向.md'));
 });
@@ -67,10 +74,20 @@ test('configured destination is used directly and existing saved destinations re
   const f=fixture();f.plugin.loadData=async()=>({settings:{noteFolder:'项目/思考'}});
   await f.plugin.onload();await f.plugin.createNewThought('设计');
   assert.ok(f.files.has('项目/思考/设计.md'));
+  assert.deepEqual(f.nativeCalls,[{parent:'项目/思考',name:'设计',content:''}]);
   assert.ok(!f.files.has('项目/思考/BrainOS'));assert.ok(!f.files.has('项目/思考/Thoughts'));
 });
 test('Session retains revisits instead of deduplicating the thought route',()=>{
   const f=fixture();f.plugin.startSession('思考.md');
   for(const key of ['A','B','A','A','C'])f.plugin.recordSessionStep(key,'思考.md');
   assert.deepEqual(f.plugin.activeSession.stepKeys,['A','B','A','A','C']);
+});
+
+test('new thought opens the file returned by the native API without choosing a filename',async()=>{
+  const f=fixture();
+  const nativeFile=new TFile('Obsidian 返回的名称.md');
+  f.plugin.app.fileManager.createNewMarkdownFile=async()=>nativeFile;
+  f.plugin.app.vault.create=()=>assert.fail('plugin must delegate creation to the native API');
+  assert.equal(await f.plugin.createNewThought(),true);
+  assert.equal(f.states[0].state.file,nativeFile.path);
 });
