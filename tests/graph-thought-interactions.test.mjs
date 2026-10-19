@@ -11,7 +11,8 @@ class Element {
   createDiv(options){return this.createEl('div',options);}
   addEventListener(){}
   remove(){this.removed=true;}
-  focus(){}
+  focus(){Element.active=this;}
+  select(){this.selectionStart=0;this.selectionEnd=this.value.length;}
   empty(){this.children=[];}
   addClass(){}
   requestSubmit(){this.onsubmit?.({preventDefault(){}});}
@@ -96,4 +97,31 @@ test('switching occurrences never silently discards unsaved prose',async()=>{
   body.value='尚未保存';select.value='0';select.onchange();await settle(f.view);
   assert.equal(f.view.editor,form);assert.equal(body.value,'尚未保存');assert.equal(select.value,'1');
   assert.match(globalThis.lastNotice,/请先保存或取消/);
+});
+
+function keyEvent(key,overrides={}){
+  return {key,preventDefault(){this.prevented=true;},...overrides};
+}
+test('Space edits the selected title with its text selected and preserves every visit body',async()=>{
+  const f=await fixture('- A\n  第一次\n- B\n- A\n  第二次\n');
+  f.view.selected=f.key('A');
+  const event=keyEvent(' ');f.view.onKeyDown(event);await settle(f.view);
+  const form=f.view.editor,title=form.find('input')[0];
+  assert.equal(event.prevented,true);assert.equal(Element.active,title);
+  assert.equal(title.selectionStart,0);assert.equal(title.selectionEnd,1);
+  title.value='新标题';form.requestSubmit();await settle(f.view);
+  assert.equal(f.content.get(f.file.path).trimEnd(),'- 新标题\n  第一次\n- B\n- 新标题\n  第二次');
+  assert.equal(f.view.selected,f.key('新标题'));
+});
+test('Space does not start title editing without selection or during other keyboard input',async()=>{
+  const f=await fixture('- A\n');
+  f.view.onKeyDown(keyEvent(' '));assert.equal(f.view.editor,undefined);
+  f.view.selected=f.key('A');
+  for(const overrides of [{isComposing:true},{ctrlKey:true},{metaKey:true},{altKey:true},{repeat:true}]){
+    f.view.onKeyDown(keyEvent(' ',overrides));await settle(f.view);
+    assert.equal(f.view.editor,undefined);
+  }
+  await f.view.beginEdit(f.view.nodes[0]);
+  const form=f.view.editor;assert.equal(Element.active,form.find('textarea')[0]);
+  f.view.onKeyDown(keyEvent(' '));assert.equal(f.view.editor,form);
 });

@@ -12,6 +12,7 @@ const bundled=await build({
     `:`
       export class TFile {constructor(path){this.path=path;this.extension='md';this.basename=path.split('/').pop().slice(0,-3);}}
       export const normalizePath=path=>path.replace(/\\/+/g,'/');
+      export const setIcon=(element,icon)=>{element.icon=icon;};
       export class MarkdownView{};export class Notice{constructor(text){globalThis.lastNotice=text;}}
       export class Modal{static opened=0;open(){Modal.opened++;}}
       export class PluginSettingTab{constructor(){}}
@@ -90,4 +91,52 @@ test('new thought opens the file returned by the native API without choosing a f
   f.plugin.app.vault.create=()=>assert.fail('plugin must delegate creation to the native API');
   assert.equal(await f.plugin.createNewThought(),true);
   assert.equal(f.states[0].state.file,nativeFile.path);
+});
+
+test('new tab action is unique, uses its own empty leaf, and is removed on unload',async()=>{
+  const f=fixture(),list=actionList(),states=[];
+  const leaf={view:{getViewType:()=> 'empty',containerEl:{querySelector:()=>list}},setViewState:async state=>states.push(state)};
+  f.plugin.app.workspace.getLeavesOfType=type=>type==='empty'?[leaf]:[];
+  f.plugin.syncNewTabActions();f.plugin.syncNewTabActions();
+  assert.equal(list.buttons.length,1);assert.equal(list.buttons[0].children[1].text,'新建思考');
+  assert.match(list.buttons[0].cls,/text-icon-button tappable mod-pill/);
+  assert.equal(list.buttons[0].children[0].icon,'git-branch');
+  assert.equal(list.buttons[0].attr.role,'button');
+  list.buttons[0].click();
+  for(let i=0;i<20&&f.plugin.creatingThought;i++)await new Promise(resolve=>setImmediate(resolve));
+  assert.ok(f.files.has('未命名思考.md'));assert.equal(f.tabs,0);
+  assert.deepEqual(states,[{type:'brainos-graph-view',state:{file:'未命名思考.md'},active:true}]);
+  f.plugin.onunload();assert.equal(list.buttons[0].isConnected,false);
+  assert.equal(f.plugin.newTabActions.size,0);
+});
+test('new tab action is recreated after native rerender and cleaned up on view changes',()=>{
+  const f=fixture(),list=actionList();
+  const leaf={view:{containerEl:{querySelector:()=>list}}};let leaves=[leaf];
+  f.plugin.app.workspace.getLeavesOfType=()=>leaves;
+  f.plugin.syncNewTabActions();list.buttons[0].isConnected=false;
+  f.plugin.syncNewTabActions();assert.equal(list.buttons.length,2);
+  leaves=[];f.plugin.syncNewTabActions();assert.equal(list.buttons[1].isConnected,false);
+  assert.equal(f.plugin.newTabActions.size,0);
+});
+
+function actionList(){
+  return {buttons:[],createDiv(options){
+    const element={...options,isConnected:true,children:[],
+      createSpan(options){const span={...options};this.children.push(span);return span;},
+      remove(){this.isConnected=false;},click(){this.onclick?.();}};
+    this.buttons.push(element);return element;
+  }};
+}
+test('new tab action supports keyboard activation and ignores held keys and composition',()=>{
+  const f=fixture(),list=actionList(),leaf={view:{containerEl:{querySelector:()=>list}}};
+  f.plugin.app.workspace.getLeavesOfType=()=>[leaf];
+  f.plugin.syncNewTabActions();let clicks=0;list.buttons[0].onclick=()=>clicks++;
+  for(const key of ['Enter',' ']){
+    let prevented=false;list.buttons[0].onkeydown({key,preventDefault(){prevented=true;}});
+    assert.equal(prevented,true);
+  }
+  for(const flags of [{repeat:true},{isComposing:true},{ctrlKey:true},{metaKey:true},{altKey:true}]){
+    list.buttons[0].onkeydown({key:' ',...flags,preventDefault(){assert.fail('input should be ignored');}});
+  }
+  assert.equal(clicks,2);
 });

@@ -125,7 +125,7 @@ export class BrainOSGraphView extends FileView {
       this.searchTimer = window.setTimeout(() => { this.searchTimer = undefined; if (!this.closed) { this.filterSnapshot(); this.draw(); } }, 250);
     };
     this.forceLayout.configure(graphForces(this.plugin.layout.graph));
-    this.canvas = this.contentEl.createEl("canvas", { cls: "brainos-graph-canvas", attr: { "aria-label": "思维视图，可用 Tab 延伸节点、Enter 创建同级节点" } });
+    this.canvas = this.contentEl.createEl("canvas", { cls: "brainos-graph-canvas", attr: { "aria-label": "思维视图，可用 Tab 延伸节点、Enter 创建同级节点、空格编辑节点标题" } });
     this.canvas.tabIndex = 0;
     this.status = this.contentEl.createDiv({ cls: "brainos-graph-status" });
     this.registerDomEvent(this.canvas, "pointerdown", event => this.onPointerDown(event));
@@ -243,7 +243,7 @@ export class BrainOSGraphView extends FileView {
       else this.plugin.startSession(this.thoughtPath || undefined);
     }));
     menu.addItem(item => item.setTitle("操作提示").setIcon("circle-help").onClick(() => {
-      new Notice("双击空白新建 · Tab 继续 · Enter 同起点分支 · 空格编辑 · Alt 拖动连线 · F 适配图谱", 10000);
+      new Notice("双击空白新建 · Tab 继续 · Enter 同起点分支 · 空格编辑标题 · Alt 拖动连线 · F 适配图谱", 10000);
     }));
   }
 
@@ -566,7 +566,7 @@ export class BrainOSGraphView extends FileView {
     if (this.nodes.length) empty?.remove();
     const selected = this.nodes.find(node => node.path === this.selected);
     this.positionDraftEditor();
-    this.status.setText(this.draftNode ? "输入节点标题 · Enter 确认 · Tab 确认并延伸 · Esc 取消" : selected ? `${selected.label}${this.file && selected.ownerPath && selected.ownerPath !== this.file.path ? ` · 引用自 ${selected.ownerPath.split("/").pop()?.replace(/\.md$/, "")}` : ""} · Tab 继续 · Enter 同起点分支` : `${this.nodes.length} 个节点 · ${this.edges.length} 条连线`);
+    this.status.setText(this.draftNode ? "输入节点标题 · Enter 确认 · Tab 确认并延伸 · Esc 取消" : selected ? `${selected.label}${this.file && selected.ownerPath && selected.ownerPath !== this.file.path ? ` · 引用自 ${selected.ownerPath.split("/").pop()?.replace(/\.md$/, "")}` : ""} · Tab 继续 · Enter 同起点分支 · 空格编辑标题` : `${this.nodes.length} 个节点 · ${this.edges.length} 条连线`);
   }
 
   private onPointerDown(event: PointerEvent) {
@@ -720,7 +720,10 @@ export class BrainOSGraphView extends FileView {
     if (event.key.toLowerCase() === "f") { event.preventDefault(); this.fitToView(); return; }
     const node = this.nodes.find(item => item.path === this.selected);
     if (event.key === "Tab" || event.key === "Enter") { event.preventDefault(); void this.createRelative(event.key === "Tab"); }
-    else if (event.key === " " && node) { event.preventDefault(); void this.beginEdit(node); }
+    else if (event.key === " " && node) {
+      event.preventDefault();
+      if (!event.repeat) void this.beginEdit(node, undefined, true);
+    }
     else if ((event.key === "Delete" || event.key === "Backspace") && node) { event.preventDefault(); this.removeNode(node); }
     else if (event.key === "Escape") { this.selected = undefined; this.forceLayout.setSelected(undefined); this.draw(); }
   }
@@ -823,7 +826,7 @@ export class BrainOSGraphView extends FileView {
     this.editor.style.top = `${this.canvas.offsetTop + point.y + radius + 6}px`;
   }
 
-  private async beginEdit(node: GraphNode, ordinal?: number) {
+  private async beginEdit(node: GraphNode, ordinal?: number, focusTitle = false) {
     if (this.busy || node.placeholder) return;
     if (!node.nodeId) { if (node.openPath) await this.app.workspace.openLinkText(node.openPath, this.file?.path ?? "", false); return; }
     await this.runEdit(async () => {
@@ -865,7 +868,8 @@ export class BrainOSGraphView extends FileView {
           this.closeEditor(); await this.refresh(); this.plugin.refreshViews();
         }).finally(() => { save.disabled = false; });
       };
-      body.focus();
+      if (focusTitle) { title.focus(); title.select(); }
+      else body.focus();
     });
   }
 

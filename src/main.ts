@@ -1,5 +1,5 @@
 import {
-  App, MarkdownView, Notice, Plugin, PluginSettingTab, Setting, TFile, WorkspaceLeaf,
+  App, MarkdownView, Notice, Plugin, PluginSettingTab, Setting, TFile, WorkspaceLeaf, setIcon,
 } from "obsidian";
 import { BrainOSGraphView, VIEW_TYPE } from "./graph-view";
 import { DEFAULT_NOTE_FOLDER, createThought } from "./thoughts";
@@ -44,6 +44,7 @@ export default class BrainOSPlugin extends Plugin {
   lastMarkdownPath?: string;
   private readonly viewMode = new MindViewMode();
   private readonly headerActions = new Map<MarkdownView, HTMLElement>();
+  private readonly newTabActions = new Map<WorkspaceLeaf, HTMLElement>();
   private unloading = false;
   private creatingThought = false;
 
@@ -115,6 +116,8 @@ export default class BrainOSPlugin extends Plugin {
     if (this.refreshTimer) window.clearTimeout(this.refreshTimer);
     for (const action of this.headerActions.values()) action.remove();
     this.headerActions.clear();
+    for (const action of this.newTabActions.values()) action.remove();
+    this.newTabActions.clear();
     // Leave ordinary Markdown tabs usable when the plugin is disabled.
     for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE)) {
       const file = (leaf.view as BrainOSGraphView).file;
@@ -124,6 +127,7 @@ export default class BrainOSPlugin extends Plugin {
 
   private syncHeaderActions() {
     if (this.unloading) return;
+    this.syncNewTabActions();
     const views = new Set<MarkdownView>();
     this.app.workspace.iterateAllLeaves(leaf => {
       if (!(leaf.view instanceof MarkdownView)) return;
@@ -140,6 +144,38 @@ export default class BrainOSPlugin extends Plugin {
     });
     for (const [view, action] of this.headerActions) {
       if (!views.has(view)) { action.remove(); this.headerActions.delete(view); }
+    }
+  }
+
+  private syncNewTabActions() {
+    if (this.unloading) return;
+    const leaves = new Set(this.app.workspace.getLeavesOfType("empty"));
+    for (const [leaf, action] of this.newTabActions) {
+      if (!leaves.has(leaf) || !action.isConnected) {
+        action.remove(); this.newTabActions.delete(leaf);
+      }
+    }
+    for (const leaf of leaves) {
+      if (this.newTabActions.has(leaf)) continue;
+      // EmptyView has no public extension API; use its native action list.
+      const list = leaf.view.containerEl.querySelector<HTMLElement>(".empty-state-action-list");
+      if (!list) continue;
+      // Obsidian's EmptyView uses an unexported text-icon component, not ButtonComponent.
+      // Match its markup so the active theme supplies all styling.
+      const button = list.createDiv({
+        cls: "text-icon-button tappable mod-pill empty-state-action brainos-new-thought-action",
+        attr: { tabindex: "0", role: "button", "aria-label": "新建思考" },
+      });
+      setIcon(button.createSpan({ cls: "text-button-icon" }), "git-branch");
+      button.createSpan({ cls: "text-button-label", text: "新建思考" });
+      button.onclick = () => { void this.createNewThought("未命名思考", leaf); };
+      button.onkeydown = event => {
+        if (event.isComposing || event.repeat || event.ctrlKey || event.metaKey || event.altKey) return;
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault(); button.click();
+        }
+      };
+      this.newTabActions.set(leaf, button);
     }
   }
 
@@ -162,12 +198,12 @@ export default class BrainOSPlugin extends Plugin {
     await this.activateView();
   }
 
-  async createNewThought(title = "未命名思考") {
+  async createNewThought(title = "未命名思考", targetLeaf?: WorkspaceLeaf) {
     if (this.creatingThought) return false;
     this.creatingThought = true;
     try {
       const file = await createThought(this.app, title, this.layout.settings.noteFolder);
-      const leaf = this.app.workspace.getLeaf("tab");
+      const leaf = targetLeaf?.view.getViewType() === "empty" ? targetLeaf : this.app.workspace.getLeaf("tab");
       await this.openMindView(leaf, file);
       await this.app.workspace.revealLeaf(leaf);
       this.refreshViews();
