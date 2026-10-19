@@ -9,6 +9,7 @@ import { InsertThoughtTarget, insertThoughtNode, createThoughtNode, editThoughtN
 import { splitNodeKey } from "./thought-document";
 import { approachOpacity, edgeInViewport, edgeStrokeKey, graphLabelAlpha, intersectsViewport, nodeScreenRadius, wrapGraphLabel } from "./graph-rendering";
 import { NodeTitleCandidate, NodeTitleSuggest } from "./node-title-suggest";
+import { isThoughtFile } from "./thought-scope";
 import { titleKeyAction } from "./node-title-input";
 
 export { VIEW_TYPE } from "./mind-view-mode";
@@ -177,13 +178,14 @@ export class BrainOSGraphView extends FileView {
   async refresh() {
     const revision = ++this.refreshRevision;
     const thoughtFiles = this.app.vault.getMarkdownFiles().filter(file => {
+      if (!isThoughtFile(file.path, this.plugin.layout.settings.noteFolder)) return false;
       const cache = this.app.metadataCache.getFileCache(file);
       return cache?.frontmatter?.brainos_type === "thought-file" || !!cache?.listItems?.length;
     });
     const thoughts = thoughtFiles.map(file => ({ path: file.path, title: String(this.app.metadataCache.getFileCache(file)?.frontmatter?.title ?? file.basename) }));
     const snapshot = this.source === "vault"
-      ? buildVaultSnapshot(this.app, thoughts, this.plugin.layout.graph.filter)
-      : await buildSnapshot(this.app, this.file ?? undefined);
+      ? buildVaultSnapshot(this.app, thoughts, this.plugin.layout.graph.filter, this.plugin.layout.settings.noteFolder)
+      : await buildSnapshot(this.app, this.file ?? undefined, this.plugin.layout.settings.noteFolder);
     if (this.closed || revision !== this.refreshRevision) return;
     this.snapshot = snapshot;
     this.forceLayout.configure(graphForces(this.plugin.layout.graph));
@@ -736,7 +738,10 @@ export class BrainOSGraphView extends FileView {
       event.preventDefault();
       if (!event.repeat) void this.beginEdit(node);
     }
-    else if ((event.key === "Delete" || event.key === "Backspace") && node) { event.preventDefault(); this.removeNode(node); }
+    else if ((event.key === "Delete" || event.key === "Backspace") && node) {
+      event.preventDefault(); event.stopPropagation();
+      if (!event.repeat) this.removeNode(node, event.key !== "Backspace");
+    }
     else if (event.key === "Escape") { this.selected = undefined; this.forceLayout.setSelected(undefined); this.draw(); }
   }
 
@@ -784,6 +789,7 @@ export class BrainOSGraphView extends FileView {
   private async beginCreate(point: Point, parent?: string, target = this.editingThought(), newPath = false, insertion?: InsertThoughtTarget) {
     if (this.busy) return;
     target = this.file?.path ?? target;
+    if (target && !isThoughtFile(target, this.plugin.layout.settings.noteFolder)) { new Notice("这篇笔记不在思考目录中"); return; }
     if (this.source === "vault" || !target) { new Notice("请先打开一个思考文件，或运行「新建思考」命令"); return; }
     this.closeEditor();
     const draft: GraphNode = { path: `draft:${crypto.randomUUID()}`, label: "", openPath: "", degree: parent ? 1 : 0, thoughts: target ? [target] : [], kind: "note", ...point };
@@ -798,8 +804,8 @@ export class BrainOSGraphView extends FileView {
     if (insertion) title.placeholder = "输入要插入的新节点名称";
     let chosen: NodeTitleCandidate | undefined;
     this.titleSuggest = new NodeTitleSuggest(this.app, title, target!, async () => {
-      const snapshot = await buildSnapshot(this.app).catch(() => this.snapshot);
-      return [...snapshot.nodes, ...this.snapshot.nodes];
+      const snapshot = await buildSnapshot(this.app, undefined, this.plugin.layout.settings.noteFolder).catch(() => ({ ...this.snapshot, nodes: this.snapshot.nodes.filter(node => !!node.ownerPath && isThoughtFile(node.ownerPath, this.plugin.layout.settings.noteFolder)) }));
+      return snapshot.nodes;
     }, candidate => {
       if (this.editor !== form || this.busy) return;
       chosen = candidate; form.requestSubmit();
@@ -884,10 +890,19 @@ export class BrainOSGraphView extends FileView {
       const title = form.createEl("input", { cls: "brainos-node-title-input", attr: { "aria-label": "节点标题", autocomplete: "off" } });
       title.value = original.node.title;
       const resizeTitle = () => { title.style.width = `${Math.max(110, Math.min(420, Array.from(title.value).length * 15 + 28))}px`; };
-      title.oninput = resizeTitle; resizeTitle();
+      let chosen: NodeTitleCandidate | undefined;
+      this.titleSuggest = new NodeTitleSuggest(this.app, title, original.file.path,
+        async () => (await buildSnapshot(this.app, original.file, this.plugin.layout.settings.noteFolder)).nodes,
+        candidate => {
+          if (this.editor !== form || this.busy) return;
+          chosen = candidate; resizeTitle(); form.requestSubmit();
+        }, () => this.composing, false, node.path);
+      title.oninput = () => { chosen = undefined; resizeTitle(); }; resizeTitle();
       title.addEventListener("compositionstart", () => { this.composing = true; });
       title.addEventListener("compositionend", () => { this.composing = false; });
       form.onkeydown = event => {
+        if (event.defaultPrevented) return;
+        if (this.titleSuggest?.isShowing && ["ArrowUp", "ArrowDown", "Enter", "Escape"].includes(event.key)) return;
         event.stopPropagation();
         const action = titleKeyAction(event);
         if (action === "none" || this.busy) return;
@@ -902,10 +917,14 @@ export class BrainOSGraphView extends FileView {
         title.disabled = true;
         void this.runEdit(async () => {
           // A title edit preserves every occurrence's original Markdown body verbatim.
-          const key = await editThoughtNode(this.app, node.path, title.value, undefined, original.node);
+          const reuse = chosen?.kind === "reuse" && chosen.node.label === title.value.trim();
+          const key = await editThoughtNode(this.app, node.path, title.value, undefined, original.node, reuse);
           if (key !== node.path) {
             const point = this.plugin.layout.positions[node.path];
-            if (point) { this.plugin.layout.positions[key] = point; delete this.plugin.layout.positions[node.path]; }
+            if (point) {
+              if (!this.plugin.layout.positions[key]) this.plugin.layout.positions[key] = point;
+              delete this.plugin.layout.positions[node.path];
+            }
             for (const session of this.plugin.layout.sessions) session.stepKeys = session.stepKeys.map(step => step === node.path ? key : step);
             this.plugin.layout.graph.hiddenPaths = this.plugin.layout.graph.hiddenPaths.map(path => path === node.path ? key : path);
             this.selected = key; await this.plugin.saveLayout();
@@ -929,8 +948,8 @@ export class BrainOSGraphView extends FileView {
     const thought = this.file?.path ?? this.editingThought();
     if (!thought || this.source === "vault") { new Notice("请先打开一个思考文件"); return; }
     await this.runEdit(async () => {
-      const snapshot = await buildSnapshot(this.app);
-      const current = this.nodes.filter(node => node.nodeId);
+      const snapshot = await buildSnapshot(this.app, undefined, this.plugin.layout.settings.noteFolder);
+      const current = this.nodes.filter(node => node.nodeId && !!node.ownerPath && isThoughtFile(node.ownerPath, this.plugin.layout.settings.noteFolder));
       const byKey = new Map([...snapshot.nodes, ...current].filter(node => node.nodeId).map(node => [node.path, node]));
       const parent = this.nodes.find(node => node.path === this.selected && node.nodeId);
       new NodeReferenceModal(this.app, [...byKey.values()], node => {
@@ -942,6 +961,8 @@ export class BrainOSGraphView extends FileView {
       }).open();
     });
   }
+
+  cancelNodeEditing() { this.closeEditor(); this.draw(); }
 
   private closeEditor() {
     this.titleSuggest?.dispose(); this.titleSuggest = undefined;
@@ -980,7 +1001,7 @@ export class BrainOSGraphView extends FileView {
     });
   }
 
-  private removeNode(node: GraphNode) {
+  private removeNode(node: GraphNode, confirm = true) {
     if (this.source === "vault") {
       this.plugin.layout.graph.hiddenPaths.push(node.path);
       this.selected = undefined; void this.plugin.saveLayout(); this.filterSnapshot(); this.draw(); return;
@@ -988,10 +1009,12 @@ export class BrainOSGraphView extends FileView {
     if (node.placeholder) return;
     const thought = this.file?.path ?? this.editingThought(node); if (!thought) return;
     const owned = splitNodeKey(node.path)?.file === thought;
-    new RemoveNodeModal(this.app, node.label, owned, () => this.runEdit(async () => {
+    const remove = () => this.runEdit(async () => {
       await removeThoughtNode(this.app, thought, node.path);
       this.selected = undefined; await this.refresh(); this.plugin.refreshViews();
-    })).open();
+    });
+    if (confirm) new RemoveNodeModal(this.app, node.label, owned, remove).open();
+    else void remove();
   }
 
   private onContextMenu(event: MouseEvent) {

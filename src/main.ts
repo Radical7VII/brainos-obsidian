@@ -1,10 +1,12 @@
 import {
-  App, MarkdownView, Notice, Plugin, PluginSettingTab, Setting, TFile, WorkspaceLeaf, setIcon,
+  App, MarkdownView, Notice, Plugin, PluginSettingTab, Setting, TFile, TFolder, WorkspaceLeaf, setIcon,
 } from "obsidian";
 import { BrainOSGraphView, VIEW_TYPE } from "./graph-view";
 import { DEFAULT_NOTE_FOLDER, createThought } from "./thoughts";
 import { GraphOptions, defaultGraphOptions, loadGraphOptions } from "./graph-options";
 import { BrainOSAIProvider, UnconfiguredAIProvider } from "./ai";
+import { FolderSuggest } from "./folder-suggest";
+import { isThoughtFile } from "./thought-scope";
 import { MindViewMode } from "./mind-view-mode";
 
 const DATA_VERSION = 5;
@@ -125,12 +127,14 @@ export default class BrainOSPlugin extends Plugin {
     }
   }
 
+  refreshIntegrations() { this.syncHeaderActions(); }
+
   private syncHeaderActions() {
     if (this.unloading) return;
     this.syncNewTabActions();
     const views = new Set<MarkdownView>();
     this.app.workspace.iterateAllLeaves(leaf => {
-      if (!(leaf.view instanceof MarkdownView)) return;
+      if (!(leaf.view instanceof MarkdownView) || !leaf.view.file || !isThoughtFile(leaf.view.file.path, this.layout.settings.noteFolder)) return;
       const view = leaf.view;
       views.add(view);
       const existing = this.headerActions.get(view);
@@ -181,6 +185,7 @@ export default class BrainOSPlugin extends Plugin {
 
   async openMindView(leaf: WorkspaceLeaf, file: TFile | null) {
     if (!file || file.extension !== "md") return;
+    if (!isThoughtFile(file.path, this.layout.settings.noteFolder)) { new Notice("这篇笔记不在思考目录中，请先在插件设置中选择对应目录"); return; }
     this.lastMarkdownPath = file.path;
     await this.viewMode.showMind(leaf, file.path);
   }
@@ -315,14 +320,35 @@ function isViewport(value: unknown): value is Viewport {
 }
 
 class BrainOSSettingTab extends PluginSettingTab {
-  constructor(app: App, private plugin: BrainOSPlugin) { super(app, plugin); }
+  private folderSuggest?: FolderSuggest;
+  constructor(app: App, private plugin: BrainOSPlugin) {
+    super(app, plugin);
+    plugin.register(() => this.folderSuggest?.dispose());
+  }
+  hide() { this.folderSuggest?.dispose(); this.folderSuggest = undefined; }
   display() {
+    this.hide();
     this.containerEl.empty();
     this.containerEl.createEl("h2", { text: "BrainOS Graph" });
-    new Setting(this.containerEl).setName("新思考存放位置")
-      .setDesc("直接使用这个笔记库内路径，不追加子文件夹；留空存到笔记库根目录。")
-      .addText(text => text.setPlaceholder("留空使用根目录").setValue(this.plugin.layout.settings.noteFolder)
-        .onChange(async value => { this.plugin.layout.settings.noteFolder = value.trim(); await this.plugin.saveLayout(); }));
+    new Setting(this.containerEl).setName("思考目录")
+      .setDesc("填写笔记库内的文件夹路径，例如 BrainOS/思考。新思考保存到这里，节点检索仅包含此目录及子目录的 Markdown；留空使用整个笔记库。")
+      .addText(text => {
+        const updateFolder = async (value: string) => {
+          const folder = value.trim();
+          this.plugin.layout.settings.noteFolder = folder;
+          await this.plugin.saveLayout();
+          for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE)) {
+            const view = leaf.view as BrainOSGraphView;
+            if (view.file && !isThoughtFile(view.file.path, folder)) await this.plugin.openMarkdownView(leaf, view.file);
+            else { view.cancelNodeEditing(); }
+          }
+          this.plugin.refreshIntegrations(); this.plugin.refreshViews();
+        };
+        text.setPlaceholder("例如 BrainOS/思考；留空使用根目录").setValue(this.plugin.layout.settings.noteFolder).onChange(updateFolder);
+        this.folderSuggest = new FolderSuggest(this.app, text.inputEl,
+          () => this.app.vault.getAllLoadedFiles().filter((file): file is TFolder => file instanceof TFolder).map(folder => folder.path),
+          updateFolder);
+      });
     new Setting(this.containerEl).setName("重新生成布局")
       .setDesc("删除保存的坐标，下一次打开图谱时自动排列节点。")
       .addButton(button => button.setButtonText("重置").onClick(async () => {

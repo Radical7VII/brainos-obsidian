@@ -25,7 +25,7 @@ __export(main_exports, {
   default: () => BrainOSPlugin
 });
 module.exports = __toCommonJS(main_exports);
-var import_obsidian7 = require("obsidian");
+var import_obsidian8 = require("obsidian");
 
 // src/graph-view.ts
 var import_obsidian6 = require("obsidian");
@@ -35,6 +35,13 @@ var import_obsidian2 = require("obsidian");
 
 // src/thought-store.ts
 var import_obsidian = require("obsidian");
+
+// src/thought-scope.ts
+function isThoughtFile(path, folder = "") {
+  const normalized = folder.trim().replace(/\\/g, "/").replace(/^\/+|\/+$/g, "").replace(/\/{2,}/g, "/");
+  if (normalized.split("/").some((part) => part === "." || part === "..")) return false;
+  return path.endsWith(".md") && (!normalized || path.startsWith(normalized + "/"));
+}
 
 // src/thought-document.ts
 var titleID = (title) => "name:" + title.trim();
@@ -218,14 +225,14 @@ function insertDocumentStepBefore(markdown, index, title) {
   if (result.occurrences.length !== doc.occurrences.length + 1 || (inserted == null ? void 0 : inserted.id) !== titleID(value) || signature(retained) !== signature(doc.occurrences)) throw new Error("\u5F53\u524D\u8DEF\u5F84\u65E0\u6CD5\u5B89\u5168\u63D2\u5165\u8282\u70B9\uFF0C\u8BF7\u5148\u68C0\u67E5 Markdown \u4E2D\u7684\u4EE3\u7801\u5757\u6216\u6CE8\u91CA");
   return next;
 }
-function updateDocumentNode(markdown, id, title, body, expected) {
+function updateDocumentNode(markdown, id, title, body, expected, allowMerge = false) {
   var _a;
   const doc = parseThoughtDocument(markdown), node = doc.nodes.find((node2) => node2.id === id);
   if (!node) throw new Error("\u8282\u70B9\u5DF2\u4E0D\u5B58\u5728\uFF0C\u8BF7\u5237\u65B0\u540E\u91CD\u8BD5");
   const value = cleanNodeTitle(title);
   if (node.target) throw new Error("\u8BF7\u5728\u6765\u6E90\u601D\u8003\u4E2D\u7F16\u8F91\u5F15\u7528\u8282\u70B9");
   if (entry(value).target) throw new Error("\u8282\u70B9\u540D\u79F0\u4E0D\u80FD\u662F\u5B8C\u6574\u7684\u6587\u4EF6\u5F15\u7528");
-  if (doc.nodes.some((other) => other.id !== id && other.id === titleID(value))) throw new Error("\u8FD9\u4E2A\u540D\u79F0\u5DF2\u5C5E\u4E8E\u53E6\u4E00\u4E2A\u8282\u70B9\uFF0C\u8BF7\u4F7F\u7528\u5176\u4ED6\u540D\u79F0\uFF1B\u590D\u7528\u8282\u70B9\u53EF\u5728\u521B\u5EFA\u65F6\u8F93\u5165\u5B83\u7684\u540D\u79F0");
+  if (!allowMerge && doc.nodes.some((other) => other.id !== id && other.id === titleID(value))) throw new Error("\u8FD9\u4E2A\u540D\u79F0\u5DF2\u5C5E\u4E8E\u53E6\u4E00\u4E2A\u8282\u70B9\uFF0C\u8BF7\u4F7F\u7528\u5176\u4ED6\u540D\u79F0\uFF1B\u590D\u7528\u8282\u70B9\u53EF\u5728\u521B\u5EFA\u65F6\u8F93\u5165\u5B83\u7684\u540D\u79F0");
   const occurrence = node.occurrences[(_a = expected == null ? void 0 : expected.ordinal) != null ? _a : node.occurrences.length - 1];
   if (!occurrence || expected && (node.title !== expected.title || occurrence.body !== expected.body || expected.revision !== void 0 && nodeRevision(node) !== expected.revision)) {
     throw new Error("\u8282\u70B9\u5DF2\u5728\u5176\u4ED6\u4F4D\u7F6E\u4FEE\u6539\uFF0C\u8BF7\u91CD\u65B0\u6253\u5F00\u7F16\u8F91\uFF0C\u907F\u514D\u8986\u76D6\u5185\u5BB9");
@@ -445,7 +452,7 @@ function requireFile(app, path) {
   if (!(file instanceof import_obsidian.TFile) || file.extension !== "md") throw new Error("\u601D\u8003\u6587\u4EF6\u5DF2\u4E0D\u5B58\u5728");
   return file;
 }
-async function loadThoughtDocument(app, file) {
+async function loadThoughtDocument(app, file, folder) {
   var _a, _b, _c, _d, _e, _f;
   const original = await app.vault.cachedRead(file);
   const paragraphs = convertParagraphThought(original);
@@ -455,7 +462,7 @@ async function loadThoughtDocument(app, file) {
   if (!state) return { original, markdown: original, doc: parseThoughtDocument(original), legacy: false, aliases };
   let markdown = stripBrainOSProperties(original.replace(LEGACY_STATE, "")).trimEnd();
   if ((_a = state.draft) == null ? void 0 : _a.trim()) markdown += "\n\n" + state.draft.trim() + "\n";
-  const byLegacyID = new Map(app.vault.getMarkdownFiles().flatMap((atom) => {
+  const byLegacyID = new Map(app.vault.getMarkdownFiles().filter((file2) => folder === void 0 || isThoughtFile(file2.path, folder)).flatMap((atom) => {
     var _a2, _b2;
     const id = (_b2 = (_a2 = app.metadataCache.getFileCache(atom)) == null ? void 0 : _a2.frontmatter) == null ? void 0 : _b2.brainos_id;
     return id == null ? [] : [[String(id).toLowerCase(), atom]];
@@ -471,6 +478,7 @@ async function loadThoughtDocument(app, file) {
       }
       const direct = app.vault.getAbstractFileByPath(key);
       const atom = direct instanceof import_obsidian.TFile ? direct : (_d = byLegacyID.get(key.toLowerCase())) != null ? _d : app.metadataCache.getFirstLinkpathDest(key, file.path);
+      if (atom && folder !== void 0 && !isThoughtFile(atom.path, folder)) continue;
       const identity = (_e = atom == null ? void 0 : atom.path) != null ? _e : key, known = imported.get(identity);
       const title = known != null ? known : uniqueLegacyTitle((_f = atom == null ? void 0 : atom.basename) != null ? _f : key, used);
       imported.set(identity, title);
@@ -593,7 +601,7 @@ async function insertThoughtNode(app, owner, title, target) {
   });
   return nodeKey(owner, titleID(cleanNodeTitle(title)));
 }
-async function editThoughtNode(app, key, title, body, expected) {
+async function editThoughtNode(app, key, title, body, expected, allowMerge = false) {
   const ref = splitNodeKey(key);
   if (!ref) throw new Error("\u8BF7\u9009\u62E9\u601D\u8003\u6587\u4EF6\u4E2D\u7684\u8282\u70B9");
   const value = cleanNodeTitle(title);
@@ -602,7 +610,7 @@ async function editThoughtNode(app, key, title, body, expected) {
     const actual = findNode({ ...loaded, doc: parseThoughtDocument(text) }, ref.id);
     if (!actual) throw new Error("\u8282\u70B9\u5DF2\u4E0D\u5B58\u5728\uFF0C\u8BF7\u5237\u65B0\u540E\u91CD\u8BD5");
     oldTitle = actual.title;
-    return updateDocumentNode(text, actual.id, value, body, expected);
+    return updateDocumentNode(text, actual.id, value, body, expected, allowMerge);
   });
   if (oldTitle !== value) await renameIncomingReferences(app, ref.file, oldTitle, value);
   return nodeKey(ref.file, titleID(value));
@@ -678,13 +686,13 @@ async function removeThoughtNode(app, owner, key) {
     return next;
   });
 }
-async function buildThoughtSnapshot(app, thoughtFile) {
+async function buildThoughtSnapshot(app, thoughtFile, folder) {
   var _a, _b;
   const nodes = /* @__PURE__ */ new Map(), edges = /* @__PURE__ */ new Map();
   const thoughts = [], steps = [];
   const loaded = /* @__PURE__ */ new Map();
   const read = (file) => {
-    if (!loaded.has(file.path)) loaded.set(file.path, loadThoughtDocument(app, file));
+    if (!loaded.has(file.path)) loaded.set(file.path, loadThoughtDocument(app, file, folder));
     return loaded.get(file.path);
   };
   const addNode = (file, node, owner) => {
@@ -710,6 +718,10 @@ async function buildThoughtSnapshot(app, thoughtFile) {
   };
   const resolve = async (owner, target, label, nodeReference = false) => {
     var _a2, _b2;
+    if (folder !== void 0) {
+      const destination = referenceFile(app, owner, target).file;
+      if (!destination || !isThoughtFile(destination.path, folder)) return "";
+    }
     const resolved = await resolveTarget(app, owner, target, label, read, nodeReference);
     if (resolved.node && resolved.file) return addNode(resolved.file, resolved.node, owner);
     const { key, file } = resolved;
@@ -734,12 +746,13 @@ async function buildThoughtSnapshot(app, thoughtFile) {
   };
   const addEdge = (owner, from, to) => {
     var _a2;
-    if (from === to) return;
+    if (!from || !to || from === to) return;
     const key = JSON.stringify([from, to]), edge = (_a2 = edges.get(key)) != null ? _a2 : { from, to, thoughts: [] };
     if (!edge.thoughts.includes(owner)) edge.thoughts.push(owner);
     edges.set(key, edge);
   };
   for (const file of thoughtFile ? [thoughtFile] : app.vault.getMarkdownFiles()) {
+    if (folder !== void 0 && !isThoughtFile(file.path, folder)) continue;
     const document = await read(file);
     const marked = ((_b = (_a = app.metadataCache.getFileCache(file)) == null ? void 0 : _a.frontmatter) == null ? void 0 : _b.brainos_type) === "thought-file";
     if (!thoughtFile && !document.doc.occurrences.length && !document.legacy && !marked) continue;
@@ -749,6 +762,7 @@ async function buildThoughtSnapshot(app, thoughtFile) {
     for (const relation of document.doc.relations) addEdge(file.path, keys.get(relation.from), keys.get(relation.to));
     for (const visit of document.doc.occurrences) {
       const key = keys.get(visit.id);
+      if (!key) continue;
       steps.push({ key, title: visit.title, body: visit.body, thoughtPath: file.path, pathIndex: visit.path, ordinal: visit.ordinal });
       for (const link of documentLinks(visit.body)) addEdge(file.path, key, await resolve(file.path, link.target, link.label));
     }
@@ -1373,12 +1387,13 @@ function graphForces(options) {
 
 // src/vault-graph.ts
 var import_obsidian3 = require("obsidian");
-function buildVaultSnapshot(app, thoughts, filter) {
+function buildVaultSnapshot(app, thoughts, filter, folder) {
   var _a;
   const nodes = /* @__PURE__ */ new Map();
   const edges = /* @__PURE__ */ new Map();
   const addFile = (file) => {
     var _a2, _b;
+    if (folder !== void 0 && !isThoughtFile(file.path, folder)) return void 0;
     if (file.extension !== "md" && !filter.showAttachments) return void 0;
     let node = nodes.get(file.path);
     if (!node) {
@@ -1573,17 +1588,21 @@ function wrapGraphLabel(text, measure, width, maxLines = 4) {
 // src/node-title-suggest.ts
 var import_obsidian5 = require("obsidian");
 var NodeTitleSuggest = class extends import_obsidian5.AbstractInputSuggest {
-  constructor(app, input, owner, loadNodes, choose, isComposing, insertion = false) {
+  constructor(app, input, owner, loadNodes, choose, isComposing, insertion = false, editingKey) {
     super(app, input);
     this.owner = owner;
     this.loadNodes = loadNodes;
     this.choose = choose;
     this.isComposing = isComposing;
     this.insertion = insertion;
+    this.editingKey = editingKey;
     __publicField(this, "disposed", false);
     __publicField(this, "showing", false);
     __publicField(this, "candidates");
     this.limit = 50;
+    input.addEventListener("compositionend", () => queueMicrotask(() => {
+      if (!this.disposed) input.dispatchEvent(new Event("input", { bubbles: true }));
+    }));
   }
   get isShowing() {
     return this.showing;
@@ -1600,31 +1619,31 @@ var NodeTitleSuggest = class extends import_obsidian5.AbstractInputSuggest {
   }
   async getSuggestions(query) {
     var _a;
-    if (this.disposed || this.isComposing()) return [];
+    if (this.disposed) return [];
     const title = query.trim();
-    if (!title) return [];
+    if (!title && !this.editingKey) return [];
     (_a = this.candidates) != null ? _a : this.candidates = this.loadNodes().catch(() => {
       this.candidates = void 0;
       return [];
     });
     const nodes = await this.candidates;
-    if (this.disposed || this.isComposing()) return [];
-    const unique = [...new Map(nodes.filter((node) => node.nodeId && node.ownerPath && !node.placeholder).map((node) => [node.path, node])).values()];
+    if (this.disposed) return [];
+    const unique = [...new Map(nodes.filter((node) => node.nodeId && node.ownerPath && !node.placeholder && (!this.editingKey || node.ownerPath === this.owner && node.path !== this.editingKey)).map((node) => [node.path, node])).values()];
     const search = (0, import_obsidian5.prepareFuzzySearch)(title);
-    const matches = unique.map((node) => ({ node, match: search(`${node.label} ${node.ownerPath}`) })).filter((item) => item.match).sort((a, b) => Number(b.node.ownerPath === this.owner) - Number(a.node.ownerPath === this.owner) || b.match.score - a.match.score).slice(0, 49);
+    const matches = unique.map((node) => ({ node, match: title ? search(node.label) : { score: 0 } })).filter((item) => item.match).sort((a, b) => Number(b.node.ownerPath === this.owner) - Number(a.node.ownerPath === this.owner) || b.match.score - a.match.score).slice(0, 49);
     const options = this.insertion ? [] : matches.map(({ node }) => ({ kind: node.ownerPath === this.owner ? "reuse" : "reference", node }));
-    if (!unique.some((node) => node.ownerPath === this.owner && node.label === title)) options.push({ kind: "create", title });
     return options;
   }
   renderSuggestion(candidate, el) {
+    var _a;
     el.addClass("mod-complex");
     const content = el.createDiv({ cls: "suggestion-content" });
-    content.createDiv({ cls: "suggestion-title", text: candidate.kind === "create" ? candidate.title : candidate.node.label });
-    content.createDiv({ cls: "suggestion-note", text: candidate.kind === "create" ? "\u65B0\u5EFA\u8282\u70B9" : candidate.kind === "reuse" ? "\u590D\u7528\u5F53\u524D\u601D\u8003\u4E2D\u7684\u8282\u70B9" : `\u5F15\u7528\u81EA ${candidate.node.ownerPath}` });
+    content.createDiv({ cls: "suggestion-title", text: candidate.node.label });
+    content.createDiv({ cls: "suggestion-note", text: (_a = candidate.node.ownerPath) != null ? _a : "" });
   }
   selectSuggestion(candidate, event) {
     if (this.disposed || this.isComposing() || event.isComposing) return;
-    this.setValue(candidate.kind === "create" ? candidate.title : candidate.node.label);
+    this.setValue(candidate.node.label);
     this.close();
     this.choose(candidate);
   }
@@ -1865,6 +1884,7 @@ var BrainOSGraphView = class extends import_obsidian6.FileView {
     const revision = ++this.refreshRevision;
     const thoughtFiles = this.app.vault.getMarkdownFiles().filter((file) => {
       var _a2, _b;
+      if (!isThoughtFile(file.path, this.plugin.layout.settings.noteFolder)) return false;
       const cache = this.app.metadataCache.getFileCache(file);
       return ((_a2 = cache == null ? void 0 : cache.frontmatter) == null ? void 0 : _a2.brainos_type) === "thought-file" || !!((_b = cache == null ? void 0 : cache.listItems) == null ? void 0 : _b.length);
     });
@@ -1872,7 +1892,7 @@ var BrainOSGraphView = class extends import_obsidian6.FileView {
       var _a2, _b, _c;
       return { path: file.path, title: String((_c = (_b = (_a2 = this.app.metadataCache.getFileCache(file)) == null ? void 0 : _a2.frontmatter) == null ? void 0 : _b.title) != null ? _c : file.basename) };
     });
-    const snapshot = this.source === "vault" ? buildVaultSnapshot(this.app, thoughts, this.plugin.layout.graph.filter) : await buildThoughtSnapshot(this.app, (_a = this.file) != null ? _a : void 0);
+    const snapshot = this.source === "vault" ? buildVaultSnapshot(this.app, thoughts, this.plugin.layout.graph.filter, this.plugin.layout.settings.noteFolder) : await buildThoughtSnapshot(this.app, (_a = this.file) != null ? _a : void 0, this.plugin.layout.settings.noteFolder);
     if (this.closed || revision !== this.refreshRevision) return;
     this.snapshot = snapshot;
     this.forceLayout.configure(graphForces(this.plugin.layout.graph));
@@ -2562,7 +2582,8 @@ var BrainOSGraphView = class extends import_obsidian6.FileView {
       if (!event.repeat) void this.beginEdit(node);
     } else if ((event.key === "Delete" || event.key === "Backspace") && node) {
       event.preventDefault();
-      this.removeNode(node);
+      event.stopPropagation();
+      if (!event.repeat) this.removeNode(node, event.key !== "Backspace");
     } else if (event.key === "Escape") {
       this.selected = void 0;
       this.forceLayout.setSelected(void 0);
@@ -2625,6 +2646,10 @@ var BrainOSGraphView = class extends import_obsidian6.FileView {
     var _a, _b;
     if (this.busy) return;
     target = (_b = (_a = this.file) == null ? void 0 : _a.path) != null ? _b : target;
+    if (target && !isThoughtFile(target, this.plugin.layout.settings.noteFolder)) {
+      new import_obsidian6.Notice("\u8FD9\u7BC7\u7B14\u8BB0\u4E0D\u5728\u601D\u8003\u76EE\u5F55\u4E2D");
+      return;
+    }
     if (this.source === "vault" || !target) {
       new import_obsidian6.Notice("\u8BF7\u5148\u6253\u5F00\u4E00\u4E2A\u601D\u8003\u6587\u4EF6\uFF0C\u6216\u8FD0\u884C\u300C\u65B0\u5EFA\u601D\u8003\u300D\u547D\u4EE4");
       return;
@@ -2645,8 +2670,8 @@ var BrainOSGraphView = class extends import_obsidian6.FileView {
     if (insertion) title.placeholder = "\u8F93\u5165\u8981\u63D2\u5165\u7684\u65B0\u8282\u70B9\u540D\u79F0";
     let chosen;
     this.titleSuggest = new NodeTitleSuggest(this.app, title, target, async () => {
-      const snapshot = await buildThoughtSnapshot(this.app).catch(() => this.snapshot);
-      return [...snapshot.nodes, ...this.snapshot.nodes];
+      const snapshot = await buildThoughtSnapshot(this.app, void 0, this.plugin.layout.settings.noteFolder).catch(() => ({ ...this.snapshot, nodes: this.snapshot.nodes.filter((node) => !!node.ownerPath && isThoughtFile(node.ownerPath, this.plugin.layout.settings.noteFolder)) }));
+      return snapshot.nodes;
     }, (candidate) => {
       if (this.editor !== form || this.busy) return;
       chosen = candidate;
@@ -2757,7 +2782,26 @@ var BrainOSGraphView = class extends import_obsidian6.FileView {
       const resizeTitle = () => {
         title.style.width = `${Math.max(110, Math.min(420, Array.from(title.value).length * 15 + 28))}px`;
       };
-      title.oninput = resizeTitle;
+      let chosen;
+      this.titleSuggest = new NodeTitleSuggest(
+        this.app,
+        title,
+        original.file.path,
+        async () => (await buildThoughtSnapshot(this.app, original.file, this.plugin.layout.settings.noteFolder)).nodes,
+        (candidate) => {
+          if (this.editor !== form || this.busy) return;
+          chosen = candidate;
+          resizeTitle();
+          form.requestSubmit();
+        },
+        () => this.composing,
+        false,
+        node.path
+      );
+      title.oninput = () => {
+        chosen = void 0;
+        resizeTitle();
+      };
       resizeTitle();
       title.addEventListener("compositionstart", () => {
         this.composing = true;
@@ -2766,6 +2810,9 @@ var BrainOSGraphView = class extends import_obsidian6.FileView {
         this.composing = false;
       });
       form.onkeydown = (event) => {
+        var _a2;
+        if (event.defaultPrevented) return;
+        if (((_a2 = this.titleSuggest) == null ? void 0 : _a2.isShowing) && ["ArrowUp", "ArrowDown", "Enter", "Escape"].includes(event.key)) return;
         event.stopPropagation();
         const action = titleKeyAction(event);
         if (action === "none" || this.busy) return;
@@ -2787,11 +2834,12 @@ var BrainOSGraphView = class extends import_obsidian6.FileView {
         }
         title.disabled = true;
         void this.runEdit(async () => {
-          const key = await editThoughtNode(this.app, node.path, title.value, void 0, original.node);
+          const reuse = (chosen == null ? void 0 : chosen.kind) === "reuse" && chosen.node.label === title.value.trim();
+          const key = await editThoughtNode(this.app, node.path, title.value, void 0, original.node, reuse);
           if (key !== node.path) {
             const point = this.plugin.layout.positions[node.path];
             if (point) {
-              this.plugin.layout.positions[key] = point;
+              if (!this.plugin.layout.positions[key]) this.plugin.layout.positions[key] = point;
               delete this.plugin.layout.positions[node.path];
             }
             for (const session of this.plugin.layout.sessions) session.stepKeys = session.stepKeys.map((step) => step === node.path ? key : step);
@@ -2830,8 +2878,8 @@ var BrainOSGraphView = class extends import_obsidian6.FileView {
       return;
     }
     await this.runEdit(async () => {
-      const snapshot = await buildThoughtSnapshot(this.app);
-      const current = this.nodes.filter((node) => node.nodeId);
+      const snapshot = await buildThoughtSnapshot(this.app, void 0, this.plugin.layout.settings.noteFolder);
+      const current = this.nodes.filter((node) => node.nodeId && !!node.ownerPath && isThoughtFile(node.ownerPath, this.plugin.layout.settings.noteFolder));
       const byKey = new Map([...snapshot.nodes, ...current].filter((node) => node.nodeId).map((node) => [node.path, node]));
       const parent = this.nodes.find((node) => node.path === this.selected && node.nodeId);
       new NodeReferenceModal(this.app, [...byKey.values()], (node) => {
@@ -2845,6 +2893,10 @@ var BrainOSGraphView = class extends import_obsidian6.FileView {
         });
       }).open();
     });
+  }
+  cancelNodeEditing() {
+    this.closeEditor();
+    this.draw();
   }
   closeEditor() {
     var _a, _b, _c;
@@ -2895,7 +2947,7 @@ var BrainOSGraphView = class extends import_obsidian6.FileView {
       this.plugin.refreshViews();
     });
   }
-  removeNode(node) {
+  removeNode(node, confirm = true) {
     var _a, _b, _c;
     if (this.source === "vault") {
       this.plugin.layout.graph.hiddenPaths.push(node.path);
@@ -2909,12 +2961,14 @@ var BrainOSGraphView = class extends import_obsidian6.FileView {
     const thought = (_b = (_a = this.file) == null ? void 0 : _a.path) != null ? _b : this.editingThought(node);
     if (!thought) return;
     const owned = ((_c = splitNodeKey(node.path)) == null ? void 0 : _c.file) === thought;
-    new RemoveNodeModal(this.app, node.label, owned, () => this.runEdit(async () => {
+    const remove = () => this.runEdit(async () => {
       await removeThoughtNode(this.app, thought, node.path);
       this.selected = void 0;
       await this.refresh();
       this.plugin.refreshViews();
-    })).open();
+    });
+    if (confirm) new RemoveNodeModal(this.app, node.label, owned, remove).open();
+    else void remove();
   }
   onContextMenu(event) {
     event.preventDefault();
@@ -3019,10 +3073,40 @@ var UnconfiguredAIProvider = class {
   }
 };
 
+// src/folder-suggest.ts
+var import_obsidian7 = require("obsidian");
+var FolderSuggest = class extends import_obsidian7.AbstractInputSuggest {
+  constructor(app, input, folders, choose) {
+    super(app, input);
+    this.folders = folders;
+    this.choose = choose;
+    __publicField(this, "disposed", false);
+  }
+  getSuggestions(query) {
+    if (this.disposed) return [];
+    const value = query.trim().replace(/\\/g, "/").toLocaleLowerCase();
+    return ["/", ...new Set(this.folders().filter((path) => path && path !== "/").sort((a, b) => a.localeCompare(b)))].filter((path) => path.toLocaleLowerCase().includes(value));
+  }
+  renderSuggestion(path, el) {
+    el.setText(path);
+  }
+  selectSuggestion(path, event) {
+    if (this.disposed || event.isComposing) return;
+    const value = path === "/" ? "" : path;
+    this.setValue(value);
+    this.close();
+    void this.choose(value);
+  }
+  dispose() {
+    this.disposed = true;
+    this.close();
+  }
+};
+
 // src/main.ts
 var DATA_VERSION = 5;
 var DEFAULT_SETTINGS = { noteFolder: DEFAULT_NOTE_FOLDER };
-var BrainOSPlugin = class extends import_obsidian7.Plugin {
+var BrainOSPlugin = class extends import_obsidian8.Plugin {
   constructor() {
     super(...arguments);
     __publicField(this, "layout", {
@@ -3069,7 +3153,7 @@ var BrainOSPlugin = class extends import_obsidian7.Plugin {
     this.addRibbonIcon("git-branch", "\u5207\u6362\u601D\u7EF4\u89C6\u56FE", () => void this.toggleMindView());
     this.addCommand({ id: "toggle-mind-view", name: "\u5207\u6362\u7F16\u8F91\uFF0F\u601D\u7EF4\u89C6\u56FE", checkCallback: (checking) => {
       var _a2, _b2;
-      const supported = !!((_a2 = this.app.workspace.getActiveViewOfType(import_obsidian7.MarkdownView)) == null ? void 0 : _a2.file) || !!((_b2 = this.app.workspace.getActiveViewOfType(BrainOSGraphView)) == null ? void 0 : _b2.file);
+      const supported = !!((_a2 = this.app.workspace.getActiveViewOfType(import_obsidian8.MarkdownView)) == null ? void 0 : _a2.file) || !!((_b2 = this.app.workspace.getActiveViewOfType(BrainOSGraphView)) == null ? void 0 : _b2.file);
       if (supported && !checking) void this.toggleMindView();
       return supported;
     } });
@@ -3116,13 +3200,16 @@ var BrainOSPlugin = class extends import_obsidian7.Plugin {
       if (file) void this.viewMode.showMarkdown(leaf, file.path);
     }
   }
+  refreshIntegrations() {
+    this.syncHeaderActions();
+  }
   syncHeaderActions() {
     if (this.unloading) return;
     this.syncNewTabActions();
     const views = /* @__PURE__ */ new Set();
     this.app.workspace.iterateAllLeaves((leaf) => {
       var _a;
-      if (!(leaf.view instanceof import_obsidian7.MarkdownView)) return;
+      if (!(leaf.view instanceof import_obsidian8.MarkdownView) || !leaf.view.file || !isThoughtFile(leaf.view.file.path, this.layout.settings.noteFolder)) return;
       const view = leaf.view;
       views.add(view);
       const existing = this.headerActions.get(view);
@@ -3157,7 +3244,7 @@ var BrainOSPlugin = class extends import_obsidian7.Plugin {
         cls: "text-icon-button tappable mod-pill empty-state-action brainos-new-thought-action",
         attr: { tabindex: "0", role: "button", "aria-label": "\u65B0\u5EFA\u601D\u8003" }
       });
-      (0, import_obsidian7.setIcon)(button.createSpan({ cls: "text-button-icon" }), "git-branch");
+      (0, import_obsidian8.setIcon)(button.createSpan({ cls: "text-button-icon" }), "git-branch");
       button.createSpan({ cls: "text-button-label", text: "\u65B0\u5EFA\u601D\u8003" });
       button.onclick = () => {
         void this.createNewThought("\u672A\u547D\u540D\u601D\u8003", leaf);
@@ -3174,6 +3261,10 @@ var BrainOSPlugin = class extends import_obsidian7.Plugin {
   }
   async openMindView(leaf, file) {
     if (!file || file.extension !== "md") return;
+    if (!isThoughtFile(file.path, this.layout.settings.noteFolder)) {
+      new import_obsidian8.Notice("\u8FD9\u7BC7\u7B14\u8BB0\u4E0D\u5728\u601D\u8003\u76EE\u5F55\u4E2D\uFF0C\u8BF7\u5148\u5728\u63D2\u4EF6\u8BBE\u7F6E\u4E2D\u9009\u62E9\u5BF9\u5E94\u76EE\u5F55");
+      return;
+    }
     this.lastMarkdownPath = file.path;
     await this.viewMode.showMind(leaf, file.path);
   }
@@ -3187,7 +3278,7 @@ var BrainOSPlugin = class extends import_obsidian7.Plugin {
       await this.openMarkdownView(mind.leaf, mind.file);
       return;
     }
-    const markdown = this.app.workspace.getActiveViewOfType(import_obsidian7.MarkdownView);
+    const markdown = this.app.workspace.getActiveViewOfType(import_obsidian8.MarkdownView);
     if (markdown == null ? void 0 : markdown.file) {
       await this.openMindView(markdown.leaf, markdown.file);
       return;
@@ -3205,7 +3296,7 @@ var BrainOSPlugin = class extends import_obsidian7.Plugin {
       this.refreshViews();
       return true;
     } catch (error) {
-      new import_obsidian7.Notice(error instanceof Error ? error.message : String(error));
+      new import_obsidian8.Notice(error instanceof Error ? error.message : String(error));
       return false;
     } finally {
       this.creatingThought = false;
@@ -3248,12 +3339,12 @@ var BrainOSPlugin = class extends import_obsidian7.Plugin {
   startSession(thoughtPath) {
     var _a, _b;
     if (this.activeSession) {
-      new import_obsidian7.Notice("\u5DF2\u6709\u4E00\u4E2A BrainOS Session \u6B63\u5728\u8BB0\u5F55");
+      new import_obsidian8.Notice("\u5DF2\u6709\u4E00\u4E2A BrainOS Session \u6B63\u5728\u8BB0\u5F55");
       return;
     }
     const path = (thoughtPath == null ? void 0 : thoughtPath.trim()) || void 0;
     const thoughtFile = path ? this.app.vault.getAbstractFileByPath(path) : void 0;
-    const thoughtTitle = thoughtFile instanceof import_obsidian7.TFile ? (_b = (_a = this.app.metadataCache.getFileCache(thoughtFile)) == null ? void 0 : _a.frontmatter) == null ? void 0 : _b.title : void 0;
+    const thoughtTitle = thoughtFile instanceof import_obsidian8.TFile ? (_b = (_a = this.app.metadataCache.getFileCache(thoughtFile)) == null ? void 0 : _a.frontmatter) == null ? void 0 : _b.title : void 0;
     const title = path ? String(thoughtTitle != null ? thoughtTitle : path) : "\u672A\u547D\u540D Session";
     const session = {
       id: crypto.randomUUID(),
@@ -3265,7 +3356,7 @@ var BrainOSPlugin = class extends import_obsidian7.Plugin {
     this.layout.sessions.unshift(session);
     this.layout.activeSessionId = session.id;
     void this.saveLayout();
-    new import_obsidian7.Notice(`Session \u5DF2\u5F00\u59CB\uFF1A${session.title}`);
+    new import_obsidian8.Notice(`Session \u5DF2\u5F00\u59CB\uFF1A${session.title}`);
     this.refreshViews();
   }
   endSession() {
@@ -3274,7 +3365,7 @@ var BrainOSPlugin = class extends import_obsidian7.Plugin {
     session.endedAt = (/* @__PURE__ */ new Date()).toISOString();
     this.layout.activeSessionId = void 0;
     void this.saveLayout();
-    new import_obsidian7.Notice(`Session \u5DF2\u4FDD\u5B58\uFF1A${session.stepKeys.length} \u6B65`);
+    new import_obsidian8.Notice(`Session \u5DF2\u4FDD\u5B58\uFF1A${session.stepKeys.length} \u6B65`);
     this.refreshViews();
   }
   recordSessionStep(stepPath, thoughtPath) {
@@ -3294,23 +3385,53 @@ function isPoint(value) {
 function isViewport(value) {
   return isRecord(value) && Number.isFinite(value.x) && Number.isFinite(value.y) && Math.abs(value.x) <= 1e7 && Math.abs(value.y) <= 1e7 && Number.isFinite(value.zoom) && value.zoom > 0 && value.zoom <= 100;
 }
-var BrainOSSettingTab = class extends import_obsidian7.PluginSettingTab {
+var BrainOSSettingTab = class extends import_obsidian8.PluginSettingTab {
   constructor(app, plugin) {
     super(app, plugin);
     this.plugin = plugin;
+    __publicField(this, "folderSuggest");
+    plugin.register(() => {
+      var _a;
+      return (_a = this.folderSuggest) == null ? void 0 : _a.dispose();
+    });
+  }
+  hide() {
+    var _a;
+    (_a = this.folderSuggest) == null ? void 0 : _a.dispose();
+    this.folderSuggest = void 0;
   }
   display() {
+    this.hide();
     this.containerEl.empty();
     this.containerEl.createEl("h2", { text: "BrainOS Graph" });
-    new import_obsidian7.Setting(this.containerEl).setName("\u65B0\u601D\u8003\u5B58\u653E\u4F4D\u7F6E").setDesc("\u76F4\u63A5\u4F7F\u7528\u8FD9\u4E2A\u7B14\u8BB0\u5E93\u5185\u8DEF\u5F84\uFF0C\u4E0D\u8FFD\u52A0\u5B50\u6587\u4EF6\u5939\uFF1B\u7559\u7A7A\u5B58\u5230\u7B14\u8BB0\u5E93\u6839\u76EE\u5F55\u3002").addText((text) => text.setPlaceholder("\u7559\u7A7A\u4F7F\u7528\u6839\u76EE\u5F55").setValue(this.plugin.layout.settings.noteFolder).onChange(async (value) => {
-      this.plugin.layout.settings.noteFolder = value.trim();
-      await this.plugin.saveLayout();
-    }));
-    new import_obsidian7.Setting(this.containerEl).setName("\u91CD\u65B0\u751F\u6210\u5E03\u5C40").setDesc("\u5220\u9664\u4FDD\u5B58\u7684\u5750\u6807\uFF0C\u4E0B\u4E00\u6B21\u6253\u5F00\u56FE\u8C31\u65F6\u81EA\u52A8\u6392\u5217\u8282\u70B9\u3002").addButton((button) => button.setButtonText("\u91CD\u7F6E").onClick(async () => {
+    new import_obsidian8.Setting(this.containerEl).setName("\u601D\u8003\u76EE\u5F55").setDesc("\u586B\u5199\u7B14\u8BB0\u5E93\u5185\u7684\u6587\u4EF6\u5939\u8DEF\u5F84\uFF0C\u4F8B\u5982 BrainOS/\u601D\u8003\u3002\u65B0\u601D\u8003\u4FDD\u5B58\u5230\u8FD9\u91CC\uFF0C\u8282\u70B9\u68C0\u7D22\u4EC5\u5305\u542B\u6B64\u76EE\u5F55\u53CA\u5B50\u76EE\u5F55\u7684 Markdown\uFF1B\u7559\u7A7A\u4F7F\u7528\u6574\u4E2A\u7B14\u8BB0\u5E93\u3002").addText((text) => {
+      const updateFolder = async (value) => {
+        const folder = value.trim();
+        this.plugin.layout.settings.noteFolder = folder;
+        await this.plugin.saveLayout();
+        for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE)) {
+          const view = leaf.view;
+          if (view.file && !isThoughtFile(view.file.path, folder)) await this.plugin.openMarkdownView(leaf, view.file);
+          else {
+            view.cancelNodeEditing();
+          }
+        }
+        this.plugin.refreshIntegrations();
+        this.plugin.refreshViews();
+      };
+      text.setPlaceholder("\u4F8B\u5982 BrainOS/\u601D\u8003\uFF1B\u7559\u7A7A\u4F7F\u7528\u6839\u76EE\u5F55").setValue(this.plugin.layout.settings.noteFolder).onChange(updateFolder);
+      this.folderSuggest = new FolderSuggest(
+        this.app,
+        text.inputEl,
+        () => this.app.vault.getAllLoadedFiles().filter((file) => file instanceof import_obsidian8.TFolder).map((folder) => folder.path),
+        updateFolder
+      );
+    });
+    new import_obsidian8.Setting(this.containerEl).setName("\u91CD\u65B0\u751F\u6210\u5E03\u5C40").setDesc("\u5220\u9664\u4FDD\u5B58\u7684\u5750\u6807\uFF0C\u4E0B\u4E00\u6B21\u6253\u5F00\u56FE\u8C31\u65F6\u81EA\u52A8\u6392\u5217\u8282\u70B9\u3002").addButton((button) => button.setButtonText("\u91CD\u7F6E").onClick(async () => {
       this.plugin.layout.positions = {};
       await this.plugin.saveLayout();
       this.plugin.refreshViews();
-      new import_obsidian7.Notice("\u56FE\u8C31\u5E03\u5C40\u5DF2\u91CD\u7F6E");
+      new import_obsidian8.Notice("\u56FE\u8C31\u5E03\u5C40\u5DF2\u91CD\u7F6E");
     }));
   }
 };

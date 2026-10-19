@@ -96,3 +96,10 @@ test('a bound new thought renders before metadata indexing and does not read oth
   assert.deepEqual(graph.thoughts,[{path:bound.path,title:'未命名思考'}]);
   assert.equal(graph.nodes.length,1);assert.equal(graph.nodes[0].openPath,bound.path);
 });
+
+test('vault graph applies the same thought folder boundary to notes and resolved links',()=>{
+  const {app}=fixture(),options=defaultGraphOptions();
+  const graph=buildVaultSnapshot(app,[],options.filter,'folder');
+  assert.deepEqual(graph.nodes.filter(node=>node.kind==='note').map(node=>node.path),['folder/C.md']);
+  assert.ok(!graph.nodes.some(node=>node.path==='A.md'||node.path==='B.md'));
+});

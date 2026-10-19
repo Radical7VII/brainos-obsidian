@@ -184,13 +184,13 @@ export function insertDocumentStepBefore(markdown: string, index: number, title:
 }
 
 /** Rename all occurrences; edit only the selected visit's body. */
-export function updateDocumentNode(markdown: string, id: string, title: string, body: string | undefined, expected?: NodeEditSnapshot) {
+export function updateDocumentNode(markdown: string, id: string, title: string, body: string | undefined, expected?: NodeEditSnapshot, allowMerge = false) {
   const doc = parseThoughtDocument(markdown), node = doc.nodes.find(node => node.id === id);
   if (!node) throw new Error("节点已不存在，请刷新后重试");
   const value = cleanNodeTitle(title);
   if (node.target) throw new Error("请在来源思考中编辑引用节点");
   if (entry(value).target) throw new Error("节点名称不能是完整的文件引用");
-  if (doc.nodes.some(other => other.id !== id && other.id === titleID(value))) throw new Error("这个名称已属于另一个节点，请使用其他名称；复用节点可在创建时输入它的名称");
+  if (!allowMerge && doc.nodes.some(other => other.id !== id && other.id === titleID(value))) throw new Error("这个名称已属于另一个节点，请使用其他名称；复用节点可在创建时输入它的名称");
   const occurrence = node.occurrences[expected?.ordinal ?? node.occurrences.length - 1];
   if (!occurrence || (expected && (node.title !== expected.title || occurrence.body !== expected.body
     || (expected.revision !== undefined && nodeRevision(node) !== expected.revision)))) {

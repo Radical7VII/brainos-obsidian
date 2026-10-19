@@ -3,28 +3,34 @@ import test from 'node:test';
 import {build} from 'esbuild';
 import {installNativeFileManager} from './native-file-manager.mjs';
 const bundled=await build({
-  stdin:{contents:'export {default as BrainOSPlugin} from "./src/main";export {Modal,TFile,MarkdownView} from "obsidian";',resolveDir:process.cwd()},
+  stdin:{contents:'export {default as BrainOSPlugin} from "./src/main";export {Modal,TFile,TFolder,MarkdownView,Setting} from "obsidian";',resolveDir:process.cwd()},
   bundle:true,write:false,format:'esm',platform:'node',logLevel:'silent',plugins:[{name:'obsidian-test',setup(b){
     b.onResolve({filter:/^\.\/graph-view$/},()=>({path:'graph',namespace:'mock'}));
     b.onResolve({filter:/^obsidian$/},()=>({path:'obsidian',namespace:'mock'}));
     b.onLoad({filter:/.*/,namespace:'mock'},args=>({loader:'js',contents:args.path==='graph'?`
       export const VIEW_TYPE='brainos-graph-view';export class BrainOSGraphView {}
     `:`
+      export class AbstractInputSuggest{constructor(app,input){this.input=input;}setValue(value){this.input.value=value;}close(){}}
+      export class TFolder{constructor(path){this.path=path;}}
       export class TFile {constructor(path){this.path=path;this.extension='md';this.basename=path.split('/').pop().slice(0,-3);}}
       export const normalizePath=path=>path.replace(/\\/+/g,'/');
       export const setIcon=(element,icon)=>{element.icon=icon;};
       export class MarkdownView{};export class Notice{constructor(text){globalThis.lastNotice=text;}}
       export class Modal{static opened=0;open(){Modal.opened++;}}
-      export class PluginSettingTab{constructor(){}}
-      export class Setting{}
+      export class PluginSettingTab{constructor(app){this.app=app;}}
+      export class Setting{
+        static instances=[];constructor(){Setting.instances.push(this);}setName(name){this.name=name;return this;}setDesc(){return this;}
+        addText(callback){this.text={inputEl:{value:""},setPlaceholder(value){this.placeholder=value;return this;},setValue(value){this.value=value;return this;},onChange(callback){this.change=callback;return this;}};callback(this.text);return this;}
+        addButton(callback){const button={setButtonText(){return this;},onClick(){return this;}};callback(button);return this;}
+      }
       export class Plugin{
-        commands=[];async loadData(){return null;}async saveData(){}registerEvent(){}registerView(){}
+        commands=[];async loadData(){return null;}async saveData(){}registerEvent(){}registerView(){}register(){}
         addRibbonIcon(){}addSettingTab(){}addCommand(command){this.commands.push(command);}
       }
     `}));
   }}],
 });
-const {BrainOSPlugin,TFile,Modal,MarkdownView}=await import('data:text/javascript;base64,'+Buffer.from(bundled.outputFiles[0].text).toString('base64'));
+const {BrainOSPlugin,TFile,TFolder,Modal,MarkdownView,Setting}=await import('data:text/javascript;base64,'+Buffer.from(bundled.outputFiles[0].text).toString('base64'));
 function fixture(){
   const files=new Map(),states=[];let tabs=0;
   const leaf={view:{getViewType:()=> 'empty'},setViewState:async state=>states.push(state)};
@@ -139,4 +145,33 @@ test('new tab action supports keyboard activation and ignores held keys and comp
     list.buttons[0].onkeydown({key:' ',...flags,preventDefault(){assert.fail('input should be ignored');}});
   }
   assert.equal(clicks,2);
+});
+
+test('thought directory text input retains the existing path and accepts a new nested path',async()=>{
+  const f=fixture();f.plugin.loadData=async()=>({settings:{noteFolder:'BrainOS'}});
+  f.plugin.app.vault.getAllLoadedFiles=()=>[new TFolder('/'),new TFolder('BrainOS'),new TFolder('BrainOS/子目录'),new TFile('其他.md')];
+  f.plugin.app.workspace.iterateAllLeaves=()=>{};
+  let tab,saved;f.plugin.addSettingTab=value=>{tab=value;};f.plugin.saveData=async value=>{saved=value;};
+  await f.plugin.onload();tab.containerEl={empty(){},createEl(){}};tab.display();
+  const setting=Setting.instances.find(item=>item.name==='思考目录');assert.ok(setting);
+  assert.equal(setting.text.value,'BrainOS');
+  await setting.text.change('  自定义/新目录  ');
+  assert.equal(saved.settings.noteFolder,'自定义/新目录');
+  await f.plugin.createNewThought('测试');assert.ok(f.files.has('自定义/新目录/测试.md'));
+  await setting.text.change(' ');assert.equal(saved.settings.noteFolder,'');
+});
+
+test('editable thought directory suggests existing folders, filters paths and persists a chosen path',async()=>{
+  const f=fixture();f.plugin.app.workspace.iterateAllLeaves=()=>{};
+  const files=[new TFolder('/'),new TFolder('BrainOS'),new TFolder('BrainOS/子目录'),new TFile('忽略.md')];
+  f.plugin.app.vault.getAllLoadedFiles=()=>files;let tab,saved;
+  f.plugin.addSettingTab=value=>{tab=value;};f.plugin.saveData=async value=>{saved=value;};
+  await f.plugin.onload();tab.containerEl={empty(){},createEl(){}};tab.display();
+  const suggest=tab.folderSuggest;
+  assert.deepEqual(suggest.getSuggestions(''),['/','BrainOS','BrainOS/子目录']);
+  assert.deepEqual(suggest.getSuggestions('子目'),['BrainOS/子目录']);
+  suggest.selectSuggestion('BrainOS/子目录',{});await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(saved.settings.noteFolder,'BrainOS/子目录');
+  suggest.selectSuggestion('/',{});await new Promise(resolve=>setImmediate(resolve));assert.equal(saved.settings.noteFolder,'');
+  tab.hide();assert.deepEqual(suggest.getSuggestions(''),[]);
 });

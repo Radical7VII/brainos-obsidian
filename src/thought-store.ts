@@ -1,4 +1,5 @@
 import { App, TFile } from "obsidian";
+import { isThoughtFile } from "./thought-scope";
 import { parseThoughtState, stepKey } from "./thoughts";
 import type { GraphNode, GraphSnapshot } from "./thoughts";
 import {
@@ -17,7 +18,7 @@ function requireFile(app: App, path: string) {
 }
 
 /** Viewing never writes. A legacy file is migrated only inside an explicit edit. */
-export async function loadThoughtDocument(app: App, file: TFile): Promise<LoadedThought> {
+export async function loadThoughtDocument(app: App, file: TFile, folder?: string): Promise<LoadedThought> {
   const original = await app.vault.cachedRead(file);
   const paragraphs = convertParagraphThought(original);
   if (paragraphs) return { original, ...paragraphs, doc: parseThoughtDocument(paragraphs.markdown), legacy: true };
@@ -26,7 +27,7 @@ export async function loadThoughtDocument(app: App, file: TFile): Promise<Loaded
   if (!state) return { original, markdown: original, doc: parseThoughtDocument(original), legacy: false, aliases };
   let markdown = stripBrainOSProperties(original.replace(LEGACY_STATE, "")).trimEnd();
   if (state.draft?.trim()) markdown += "\n\n" + state.draft.trim() + "\n";
-  const byLegacyID = new Map(app.vault.getMarkdownFiles().flatMap(atom => {
+  const byLegacyID = new Map(app.vault.getMarkdownFiles().filter(file => folder === undefined || isThoughtFile(file.path, folder)).flatMap(atom => {
     const id = app.metadataCache.getFileCache(atom)?.frontmatter?.brainos_id;
     return id == null ? [] : [[String(id).toLowerCase(), atom] as const];
   }));
@@ -38,6 +39,7 @@ export async function loadThoughtDocument(app: App, file: TFile): Promise<Loaded
       if (!key) { newPath = true; continue; }
       const direct = app.vault.getAbstractFileByPath(key);
       const atom = direct instanceof TFile ? direct : byLegacyID.get(key.toLowerCase()) ?? app.metadataCache.getFirstLinkpathDest(key, file.path);
+      if (atom && folder !== undefined && !isThoughtFile(atom.path, folder)) continue;
       const identity = atom?.path ?? key, known = imported.get(identity);
       const title = known ?? uniqueLegacyTitle(atom?.basename ?? key, used);
       imported.set(identity, title);
@@ -157,7 +159,7 @@ export async function insertThoughtNode(app: App, owner: string, title: string, 
   return nodeKey(owner, titleID(cleanNodeTitle(title)));
 }
 
-export async function editThoughtNode(app: App, key: string, title: string, body: string | undefined, expected?: NodeEditSnapshot) {
+export async function editThoughtNode(app: App, key: string, title: string, body: string | undefined, expected?: NodeEditSnapshot, allowMerge = false) {
   const ref = splitNodeKey(key);
   if (!ref) throw new Error("请选择思考文件中的节点");
   const value = cleanNodeTitle(title);
@@ -166,7 +168,7 @@ export async function editThoughtNode(app: App, key: string, title: string, body
     const actual = findNode({ ...loaded, doc: parseThoughtDocument(text) }, ref.id);
     if (!actual) throw new Error("节点已不存在，请刷新后重试");
     oldTitle = actual.title;
-    return updateDocumentNode(text, actual.id, value, body, expected);
+    return updateDocumentNode(text, actual.id, value, body, expected, allowMerge);
   });
   if (oldTitle !== value) await renameIncomingReferences(app, ref.file, oldTitle, value);
   return nodeKey(ref.file, titleID(value));
@@ -240,12 +242,12 @@ export async function removeThoughtNode(app: App, owner: string, key: string) {
   });
 }
 
-export async function buildThoughtSnapshot(app: App, thoughtFile?: TFile): Promise<GraphSnapshot> {
+export async function buildThoughtSnapshot(app: App, thoughtFile?: TFile, folder?: string): Promise<GraphSnapshot> {
   const nodes = new Map<string, GraphNode>(), edges = new Map<string, GraphSnapshot["edges"][number]>();
   const thoughts: GraphSnapshot["thoughts"] = [], steps: NonNullable<GraphSnapshot["steps"]> = [];
   const loaded = new Map<string, Promise<LoadedThought>>();
   const read = (file: TFile) => {
-    if (!loaded.has(file.path)) loaded.set(file.path, loadThoughtDocument(app, file));
+    if (!loaded.has(file.path)) loaded.set(file.path, loadThoughtDocument(app, file, folder));
     return loaded.get(file.path)!;
   };
   const addNode = (file: TFile, node: DocumentNode, owner: string) => {
@@ -260,6 +262,10 @@ export async function buildThoughtSnapshot(app: App, thoughtFile?: TFile): Promi
     return key;
   };
   const resolve = async (owner: string, target: string, label?: string, nodeReference = false) => {
+    if (folder !== undefined) {
+      const destination = referenceFile(app, owner, target).file;
+      if (!destination || !isThoughtFile(destination.path, folder)) return "";
+    }
     const resolved = await resolveTarget(app, owner, target, label, read, nodeReference);
     if (resolved.node && resolved.file) return addNode(resolved.file, resolved.node, owner);
     const { key, file } = resolved;
@@ -276,12 +282,13 @@ export async function buildThoughtSnapshot(app: App, thoughtFile?: TFile): Promi
     return key;
   };
   const addEdge = (owner: string, from: string, to: string) => {
-    if (from === to) return;
+    if (!from || !to || from === to) return;
     const key = JSON.stringify([from, to]), edge = edges.get(key) ?? { from, to, thoughts: [] };
     if (!edge.thoughts.includes(owner)) edge.thoughts.push(owner);
     edges.set(key, edge);
   };
   for (const file of thoughtFile ? [thoughtFile] : app.vault.getMarkdownFiles()) {
+    if (folder !== undefined && !isThoughtFile(file.path, folder)) continue;
     const document = await read(file);
     const marked = app.metadataCache.getFileCache(file)?.frontmatter?.brainos_type === "thought-file";
     if (!thoughtFile && !document.doc.occurrences.length && !document.legacy && !marked) continue;
@@ -291,6 +298,7 @@ export async function buildThoughtSnapshot(app: App, thoughtFile?: TFile): Promi
     for (const relation of document.doc.relations) addEdge(file.path, keys.get(relation.from)!, keys.get(relation.to)!);
     for (const visit of document.doc.occurrences) {
       const key = keys.get(visit.id)!;
+      if (!key) continue;
       steps.push({ key, title: visit.title, body: visit.body, thoughtPath: file.path, pathIndex: visit.path, ordinal: visit.ordinal });
       for (const link of documentLinks(visit.body)) addEdge(file.path, key, await resolve(file.path, link.target, link.label));
     }

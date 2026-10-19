@@ -1,12 +1,14 @@
 import { App, getAllTags, TFile } from "obsidian";
+import { isThoughtFile } from "./thought-scope";
 import type { GraphNode, GraphEdge, GraphSnapshot } from "./thoughts";
 import type { GraphOptions } from "./graph-options";
 
 /** Use Obsidian's resolved reference index, never read every Markdown body. */
-export function buildVaultSnapshot(app: App, thoughts: GraphSnapshot["thoughts"], filter: GraphOptions["filter"]): GraphSnapshot {
+export function buildVaultSnapshot(app: App, thoughts: GraphSnapshot["thoughts"], filter: GraphOptions["filter"], folder?: string): GraphSnapshot {
   const nodes = new Map<string, GraphNode>();
   const edges = new Map<string, GraphEdge>();
   const addFile = (file: TFile) => {
+    if (folder !== undefined && !isThoughtFile(file.path, folder)) return undefined;
     if (file.extension !== "md" && !filter.showAttachments) return undefined;
     let node = nodes.get(file.path);
     if (!node) {

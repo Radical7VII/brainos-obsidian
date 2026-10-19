@@ -278,3 +278,18 @@ test('document insertion cannot cross path boundaries or add a file-reference ti
   assert.throws(()=>api.insertDocumentStepBefore(original,1,'新节点'),/没有父节点/);
   assert.throws(()=>api.insertDocumentStepBefore('- A\n- B\n',1,'[[外部.md]]'),/普通节点名称/);
 });
+
+test('thought directory scopes reads, descendants and references without reading outside Markdown',async()=>{
+  const f=fixture();
+  f.add('BrainOS/思考.md','- A\n- [[BrainOS/子目录/另一个.md|B]]\n- [[其他/杂音.md|杂音]]\n  正文链接 [[BrainOS-other/相似目录.md]]\n');
+  f.add('BrainOS/子目录/另一个.md','- B\n');
+  f.add('其他/杂音.md','<!-- brainos-state\n损坏\n-->');
+  f.add('BrainOS-other/相似目录.md','- 不应读取\n');f.add('根目录.md','- 不应读取\n');
+  const reads=[];const original=f.app.vault.cachedRead;f.app.vault.cachedRead=async file=>{reads.push(file.path);return original(file);};
+  const graph=await buildThoughtSnapshot(f.app,undefined,'BrainOS');
+  assert.deepEqual(graph.nodes.map(node=>node.label).sort(),['A','B']);
+  assert.ok(graph.edges.some(edge=>edge.from===nodeKey('BrainOS/思考.md',titleID('A'))&&edge.to===nodeKey('BrainOS/子目录/另一个.md',titleID('B'))));
+  assert.deepEqual([...new Set(reads)].sort(),['BrainOS/子目录/另一个.md','BrainOS/思考.md'].sort());
+  reads.length=0;const excluded=await buildThoughtSnapshot(f.app,f.files.get('其他/杂音.md'),'BrainOS');
+  assert.equal(excluded.nodes.length,0);assert.deepEqual(reads,[]);
+});
