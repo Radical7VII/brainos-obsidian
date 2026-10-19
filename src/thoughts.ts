@@ -6,11 +6,12 @@ export type ThoughtPath = { id?: string; title?: string; steps?: ThoughtStep[] }
 export type ThoughtState = { paths?: ThoughtPath[]; draft?: string; viewport?: Point & { zoom: number } };
 export type GraphNode = Point & { path: string; label: string; openPath: string; degree: number; thoughts: string[]; placeholder?: boolean; ownerPath?: string; nodeId?: string; kind?: "note" | "unresolved" | "tag" | "attachment"; weight?: number; tags?: string[] };
 export type GraphEdge = { from: string; to: string; thoughts: string[] };
-export type GraphSnapshot = { nodes: GraphNode[]; edges: GraphEdge[]; thoughts: { path: string; title: string }[] };
-export const DEFAULT_NOTE_FOLDER = "BrainOS/Thoughts";
+export type ThoughtVisit = { key: string; title: string; body: string; thoughtPath: string; pathIndex: number; ordinal: number };
+export type GraphSnapshot = { nodes: GraphNode[]; edges: GraphEdge[]; thoughts: { path: string; title: string }[]; steps?: ThoughtVisit[] };
+export const DEFAULT_NOTE_FOLDER = "";
 const STATE_BLOCK = /<!--\s*brainos-state\s*\n([\s\S]*?)\n-->/;
 
-/** Sanitize only thought filenames; nodes use independent in-document IDs. */
+/** Sanitize filenames only; node names remain ordinary text. */
 export function nodeTitle(value: string): string {
   return value.replace(/[\\/:*?"<>|\r\n]/g, "-").trim().replace(/[. ]+$/g, "") || "未命名";
 }
@@ -41,11 +42,14 @@ export function parseThoughtState(markdown: string): ThoughtState | null {
 export { buildThoughtSnapshot as buildSnapshot } from "./thought-store";
 
 function targetFolder(folder: string) {
-  return normalizePath(folder.trim().replace(/^\/+|\/+$/g, "")) || DEFAULT_NOTE_FOLDER;
+  const value = folder.trim().replace(/\\/g, "/").replace(/^\/+|\/+$/g, "");
+  if (value.split("/").some(part => part === ".." || part === ".")) throw new Error("请使用笔记库内的文件夹路径");
+  return value ? normalizePath(value) : "";
 }
 
 export async function ensureFolder(app: App, folder: string) {
   const normalized = targetFolder(folder);
+  if (!normalized) return;
   let current = "";
   for (const part of normalized.split("/")) {
     current = current ? `${current}/${part}` : part;
@@ -57,13 +61,11 @@ export class ThoughtFileExistsError extends Error {
   constructor(readonly path: string) { super("这个路径已有文件，请使用其他名称或文件夹"); }
 }
 
-export async function createThought(app: App, title: string, folder: string, source = "") {
+export async function createThought(app: App, title: string, folder: string) {
   const normalized = targetFolder(folder);
   await ensureFolder(app, normalized);
   const name = title.trim() || "未命名思考";
-  const path = normalizePath(`${normalized}/${nodeTitle(name)}.md`);
+  const path = normalizePath((normalized ? normalized + "/" : "") + nodeTitle(name) + ".md");
   if (app.vault.getAbstractFileByPath(path)) throw new ThoughtFileExistsError(path);
-  title = name;
-  const now = new Date().toISOString();
-  return app.vault.create(path, `---\nbrainos_type: thought-file\nbrainos_version: 2\nid: ${crypto.randomUUID()}\ntitle: ${JSON.stringify(title)}\ncreated_at: ${now}\nupdated_at: ${now}\nstatus: active\n${source.trim() ? `source: ${JSON.stringify(source.trim())}\n` : ""}---\n\n# ${title}\n\n## 节点\n\n`);
+  return app.vault.create(path, "");
 }

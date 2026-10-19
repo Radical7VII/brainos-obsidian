@@ -20,7 +20,7 @@
 .brainos-graph-controls .setting-item-control { min-width: 100px; }
 .brainos-graph-controls input[type="range"] { width: 110px; }
 .brainos-node-editor { box-sizing: border-box; max-height: calc(100% - 16px); overflow: auto; position: absolute; z-index: 2; width: min(320px, calc(100% - 16px)); padding: 12px; display: flex; flex-direction: column; gap: 8px; border: 1px solid var(--background-modifier-border); border-radius: 8px; background: var(--background-primary); box-shadow: var(--shadow-l); }
-.brainos-node-editor input, .brainos-node-editor textarea { width: 100%; box-sizing: border-box; }
+.brainos-node-editor input, .brainos-node-editor textarea, .brainos-node-editor select { width: 100%; box-sizing: border-box; }
 .brainos-node-editor textarea { min-height: 120px; resize: vertical; font-family: var(--font-monospace); }
 .brainos-node-editor-document { min-height: 260px !important; }
 .brainos-node-candidates { display: flex; flex-direction: column; gap: 2px; max-height: 180px; overflow: auto; margin: -2px 0 2px; }

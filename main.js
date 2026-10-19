@@ -37,14 +37,232 @@ var import_obsidian2 = require("obsidian");
 var import_obsidian = require("obsidian");
 
 // src/thought-document.ts
-var NODE_ID = /^[a-zA-Z0-9-]+$/;
-var newNodeID = () => `node-${crypto.randomUUID()}`;
-var nodeKey = (file, id) => `${file}#^${id}`;
+var titleID = (title) => "name:" + title.trim();
+var nodeKey = (file, id) => file + "#brainos=" + encodeURIComponent(id);
 function splitNodeKey(key) {
-  const index = key.lastIndexOf("#^");
-  return index >= 0 ? { file: key.slice(0, index), id: key.slice(index + 2) } : void 0;
+  const index = key.lastIndexOf("#brainos=");
+  if (index >= 0) {
+    try {
+      return { file: key.slice(0, index), id: decodeURIComponent(key.slice(index + 9)) };
+    } catch (e) {
+      return void 0;
+    }
+  }
+  const legacy = key.lastIndexOf("#^");
+  return legacy >= 0 ? { file: key.slice(0, legacy), id: key.slice(legacy + 2) } : void 0;
 }
 function markdownLines(text) {
+  const result = [];
+  let fence;
+  let comment = false;
+  const frontmatter = text.match(/^---\r?\n[\s\S]*?\r?\n---[ \t]*(?:\r?\n|$)/);
+  const headerEnd = frontmatter && /^(?!- )[^ \t\r\n:#][^:\r\n]*:/m.test(frontmatter[0]) ? frontmatter[0].length : 0;
+  for (const match of text.matchAll(/[^\n]*(?:\n|$)/g)) {
+    if (!match[0]) continue;
+    const raw = match[0].replace(/\r?\n$/, "");
+    if (match.index < headerEnd) {
+      result.push({ text: raw, start: match.index, end: match.index + match[0].length, code: true });
+      continue;
+    }
+    const marker = raw.match(/^[ \t]*(\x60{3,}|~{3,})(.*)$/);
+    const hidden = comment || raw.trimStart().startsWith("<!--");
+    const code = !!fence || !!marker || hidden;
+    if (!hidden && marker) {
+      if (!fence) fence = { char: marker[1][0], length: marker[1].length };
+      else if (marker[1][0] === fence.char && marker[1].length >= fence.length && !marker[2].trim()) fence = void 0;
+    }
+    const visible = raw.replace(/(\x60+).*?\1/g, "");
+    if (!fence && visible.includes("<!--")) comment = !visible.includes("-->", visible.indexOf("<!--") + 4);
+    else if (comment && raw.includes("-->")) comment = false;
+    result.push({ text: raw, start: match.index, end: match.index + match[0].length, code });
+  }
+  return result;
+}
+function documentLinks(text, offset = 0) {
+  const links = [];
+  for (const line of markdownLines(text)) {
+    if (line.code || /^(?: {4}|\t)/.test(line.text)) continue;
+    const visible = line.text.replace(/(\x60+).*?\1/g, (value) => " ".repeat(value.length)).replace(/<!--.*?-->/g, (value) => " ".repeat(value.length));
+    for (const match of visible.matchAll(/!?\[\[([^\]\n]+)\]\]/g)) {
+      const [target, ...alias] = match[1].split("|");
+      const start = offset + line.start + match.index;
+      links.push({
+        target: target.trim(),
+        ...alias.length ? { label: alias.join("|") } : {},
+        start,
+        end: start + match[0].length,
+        original: text.slice(line.start + match.index, line.start + match.index + match[0].length)
+      });
+    }
+    for (const match of visible.matchAll(/!?\[([^\]\n]*)\]\(([^\s)]+)(?:\s+"[^"\n]*")?\)/g)) {
+      if (match.index > 0 && visible[match.index - 1] === "[") continue;
+      let target;
+      try {
+        target = decodeURIComponent(match[2].replace(/^<|>$/g, ""));
+      } catch (e) {
+        continue;
+      }
+      if (/^[a-z][a-z0-9+.-]*:/i.test(target)) continue;
+      const start = offset + line.start + match.index;
+      links.push({
+        target,
+        label: match[1],
+        start,
+        end: start + match[0].length,
+        original: text.slice(line.start + match.index, line.start + match.index + match[0].length)
+      });
+    }
+  }
+  return links.sort((a, b) => a.start - b.start);
+}
+function entry(title) {
+  const value = title.trim(), links = documentLinks(value);
+  if (links.length === 1 && links[0].start === 0 && links[0].end === value.length) {
+    const { target, label } = links[0];
+    return { id: "reference:" + JSON.stringify([target, label != null ? label : ""]), title: label || target, target, referenceLabel: label };
+  }
+  return { id: titleID(value), title: value };
+}
+function unindentBody(text) {
+  return text.replace(/^\s*\n/, "").trimEnd().split("\n").map((line) => line.startsWith("  ") ? line.slice(2) : line.startsWith("	") ? line.slice(1) : line).join("\n");
+}
+function parseThoughtDocument(markdown) {
+  const nodes = /* @__PURE__ */ new Map();
+  const occurrences = [], paths = [], relations = [];
+  let path = [];
+  let pending;
+  const finish = (end) => {
+    var _a;
+    if (!pending) return;
+    const value = entry(pending.text.slice(2));
+    let node = nodes.get(value.id);
+    const occurrence = {
+      ...value,
+      body: unindentBody(markdown.slice(pending.end, end)),
+      start: pending.start,
+      titleEnd: pending.end,
+      end,
+      path: paths.length,
+      ordinal: (_a = node == null ? void 0 : node.occurrences.length) != null ? _a : 0
+    };
+    occurrences.push(occurrence);
+    if (!node) {
+      node = { ...value, body: occurrence.body, start: occurrence.start, end, occurrences: [] };
+      nodes.set(value.id, node);
+    }
+    node.occurrences.push(occurrence);
+    node.body = occurrence.body;
+    const previous = path[path.length - 1];
+    if (previous) relations.push({ from: previous.id, to: occurrence.id, start: occurrence.start, end: occurrence.titleEnd });
+    path.push(occurrence);
+    pending = void 0;
+  };
+  for (const line of markdownLines(markdown)) {
+    if (line.code) continue;
+    if (/^---[ \t]*$/.test(line.text)) {
+      finish(line.start);
+      if (path.length) paths.push(path);
+      path = [];
+    } else if (/^- \S/.test(line.text)) {
+      finish(line.start);
+      pending = line;
+    }
+  }
+  finish(markdown.length);
+  if (path.length) paths.push(path);
+  return { nodes: [...nodes.values()], occurrences, paths, relations };
+}
+function nodeRevision(node) {
+  return JSON.stringify(node.occurrences.map((occurrence) => [occurrence.title, occurrence.body]));
+}
+function cleanNodeTitle(title) {
+  if (/[\r\n]/.test(title)) throw new Error("\u8282\u70B9\u540D\u79F0\u53EA\u80FD\u5360\u4E00\u884C");
+  const value = title.trim();
+  if (!value) throw new Error("\u8282\u70B9\u540D\u79F0\u4E0D\u80FD\u4E3A\u7A7A");
+  return value;
+}
+function renderOccurrence(title, body = "") {
+  const value = body.replace(/\r\n/g, "\n").trimEnd();
+  return "- " + cleanNodeTitle(title) + "\n" + (value ? value.split("\n").map((line) => line ? "  " + line : "").join("\n") + "\n" : "");
+}
+function occurrenceTitle(node) {
+  return node.target ? node.referenceLabel === void 0 ? "[[" + node.target + "]]" : wikiLink(node.target, node.referenceLabel) : node.title;
+}
+function appendDocumentStep(markdown, title, body = "", newPath = false) {
+  var _a;
+  const before = markdown.trimEnd(), doc = parseThoughtDocument(markdown);
+  const separator = newPath && doc.occurrences.length && !/^---[ \t]*$/.test((_a = before.split("\n").pop()) != null ? _a : "");
+  const next = (before ? before + (separator ? "\n\n---\n\n" : "\n") : "") + renderOccurrence(title, body);
+  if (parseThoughtDocument(next).occurrences.length !== doc.occurrences.length + 1) throw new Error("\u6587\u4EF6\u672B\u5C3E\u7684\u4EE3\u7801\u5757\u6216\u6CE8\u91CA\u5C1A\u672A\u95ED\u5408\uFF0C\u8BF7\u5148\u5728 Markdown \u4E2D\u8865\u9F50");
+  return next;
+}
+function appendDocumentContinuation(markdown, from, to, body = "") {
+  if (!from) return appendDocumentStep(markdown, to, body, true);
+  let text = markdown;
+  const visits = parseThoughtDocument(text).occurrences, last = visits[visits.length - 1];
+  if (!last || last.id !== entry(from).id || last.end < text.length) {
+    text = appendDocumentStep(text, from, "", true);
+  }
+  return appendDocumentStep(text, to, body);
+}
+function updateDocumentNode(markdown, id, title, body, expected) {
+  var _a;
+  const doc = parseThoughtDocument(markdown), node = doc.nodes.find((node2) => node2.id === id);
+  if (!node) throw new Error("\u8282\u70B9\u5DF2\u4E0D\u5B58\u5728\uFF0C\u8BF7\u5237\u65B0\u540E\u91CD\u8BD5");
+  const value = cleanNodeTitle(title);
+  if (node.target) throw new Error("\u8BF7\u5728\u6765\u6E90\u601D\u8003\u4E2D\u7F16\u8F91\u5F15\u7528\u8282\u70B9");
+  if (entry(value).target) throw new Error("\u8282\u70B9\u540D\u79F0\u4E0D\u80FD\u662F\u5B8C\u6574\u7684\u6587\u4EF6\u5F15\u7528");
+  if (doc.nodes.some((other) => other.id !== id && other.id === titleID(value))) throw new Error("\u8FD9\u4E2A\u540D\u79F0\u5DF2\u5C5E\u4E8E\u53E6\u4E00\u4E2A\u8282\u70B9\uFF0C\u8BF7\u4F7F\u7528\u5176\u4ED6\u540D\u79F0\uFF1B\u590D\u7528\u8282\u70B9\u53EF\u5728\u521B\u5EFA\u65F6\u8F93\u5165\u5B83\u7684\u540D\u79F0");
+  const occurrence = node.occurrences[(_a = expected == null ? void 0 : expected.ordinal) != null ? _a : node.occurrences.length - 1];
+  if (!occurrence || expected && (node.title !== expected.title || occurrence.body !== expected.body || expected.revision !== void 0 && nodeRevision(node) !== expected.revision)) {
+    throw new Error("\u8282\u70B9\u5DF2\u5728\u5176\u4ED6\u4F4D\u7F6E\u4FEE\u6539\uFF0C\u8BF7\u91CD\u65B0\u6253\u5F00\u7F16\u8F91\uFF0C\u907F\u514D\u8986\u76D6\u5185\u5BB9");
+  }
+  let text = markdown;
+  for (const visit of [...node.occurrences].reverse()) {
+    const rendered = visit === occurrence ? renderOccurrence(value, body) + "\n" : "- " + value + markdown.slice(visit.start + 2 + visit.title.length, visit.end);
+    text = text.slice(0, visit.start) + rendered + text.slice(visit.end);
+  }
+  const expectedIDs = doc.occurrences.map((visit) => visit.id === id ? titleID(value) : visit.id);
+  if (JSON.stringify(parseThoughtDocument(text).occurrences.map((visit) => visit.id)) !== JSON.stringify(expectedIDs)) {
+    throw new Error("\u6B63\u6587\u4E2D\u7684\u4EE3\u7801\u5757\u6216\u6CE8\u91CA\u5C1A\u672A\u95ED\u5408\uFF0C\u4F1A\u906E\u853D\u540E\u7EED\u8BB0\u5F55\uFF0C\u8BF7\u5148\u8865\u9F50");
+  }
+  return text;
+}
+function removeDocumentRelation(markdown, matches) {
+  let text = markdown;
+  for (const edge of parseThoughtDocument(markdown).relations.filter((edge2) => matches(edge2.from, edge2.to)).reverse()) {
+    text = text.slice(0, edge.start).trimEnd() + "\n\n---\n\n" + text.slice(edge.start);
+  }
+  return text;
+}
+function removeDocumentNode(markdown, id) {
+  let text = markdown;
+  for (const visit of parseThoughtDocument(markdown).occurrences.filter((visit2) => visit2.id === id).reverse()) {
+    text = text.slice(0, visit.start) + "---\n\n" + text.slice(visit.end);
+  }
+  return text;
+}
+function unlinkDocumentBody(markdown, nodeID, matches) {
+  var _a;
+  let text = markdown;
+  const node = parseThoughtDocument(markdown).nodes.find((node2) => node2.id === nodeID);
+  if (!node) return text;
+  for (const visit of [...node.occurrences].reverse()) {
+    let body = visit.body;
+    const links = documentLinks(body).filter((link) => matches(link.target, link.label)).reverse();
+    if (!links.length) continue;
+    for (const link of links) body = body.slice(0, link.start) + ((_a = link.label) != null ? _a : link.target) + body.slice(link.end);
+    text = text.slice(0, visit.start) + renderOccurrence(occurrenceTitle(visit), body) + "\n" + text.slice(visit.end);
+  }
+  return text;
+}
+function wikiLink(target, title) {
+  if (/[\[\]\r\n|]/.test(target)) throw new Error("\u94FE\u63A5\u8DEF\u5F84\u542B\u6709\u4E0D\u652F\u6301\u7684\u5B57\u7B26");
+  return "[[" + target + "|" + title.replace(/[\[\]|\r\n]/g, " ") + "]]";
+}
+
+// src/legacy-thought-document.ts
+function markdownLines2(text) {
   const result = [];
   let fence;
   for (const match of text.matchAll(/[^\n]*(?:\n|$)/g)) {
@@ -60,10 +278,10 @@ function markdownLines(text) {
   }
   return result;
 }
-function documentLinks(text, offset = 0) {
+function documentLinks2(text, offset = 0) {
   const links = [];
   let comment = false;
-  for (const line of markdownLines(text)) {
+  for (const line of markdownLines2(text)) {
     if (line.code) continue;
     const hidden = line.text.startsWith("<!--") || comment;
     if (line.text.includes("<!--")) comment = true;
@@ -96,9 +314,9 @@ function documentLinks(text, offset = 0) {
   }
   return links.sort((a, b) => a.start - b.start);
 }
-function parseThoughtDocument(markdown) {
+function parseThoughtDocument2(markdown) {
   var _a, _b, _c, _d;
-  const lines = markdownLines(markdown);
+  const lines = markdownLines2(markdown);
   const headings = lines.filter((line) => !line.code && /^## (节点|引用|关系)\s*$/.test(line.text));
   const sections = {};
   for (let index = 0; index < headings.length; index++) {
@@ -136,113 +354,75 @@ function parseThoughtDocument(markdown) {
   if (links) for (const line of lines.filter((line2) => !line2.code && line2.start >= links.content && line2.start < links.end)) {
     const match = line.text.match(/^\s*- (\[\[[^\n]+?\]\]) → (\[\[[^\n]+?\]\])\s*$/);
     if (!match) continue;
-    const pair = documentLinks(line.text);
+    const pair = documentLinks2(line.text);
     if (pair.length === 2) relations.push({ from: pair[0].target, to: pair[1].target, start: line.start, end: line.end });
   }
-  const references = sections.\u5F15\u7528 ? documentLinks(markdown.slice(sections.\u5F15\u7528.content, sections.\u5F15\u7528.end), sections.\u5F15\u7528.content) : [];
+  const references = sections.\u5F15\u7528 ? documentLinks2(markdown.slice(sections.\u5F15\u7528.content, sections.\u5F15\u7528.end), sections.\u5F15\u7528.content) : [];
   return { nodes, relations, references, sections };
 }
-function isThoughtDocument(markdown) {
-  return !!parseThoughtDocument(markdown).sections.\u8282\u70B9;
-}
-function paragraphTitle(title) {
-  const value = title.trim().replace(/[\r\n]+/g, " ");
-  if (!value) throw new Error("\u8282\u70B9\u6807\u9898\u4E0D\u80FD\u4E3A\u7A7A");
-  return value.replace(/\\/g, "\\\\").replace(/\*/g, "\\*");
-}
-function renderNode(id, title, body) {
-  if (!NODE_ID.test(id)) throw new Error("\u8282\u70B9\u6807\u8BC6\u65E0\u6548");
-  const sample = parseThoughtDocument(`## \u8282\u70B9
 
-**node** ^${id}
-
-${body}
-`);
-  if (sample.nodes.length !== 1 || Object.keys(sample.sections).length !== 1) throw new Error("\u6B63\u6587\u5305\u542B\u72EC\u7ACB\u7684\u7C97\u4F53\u8282\u70B9\u6807\u9898\u6216\u533A\u57DF\u6807\u8BB0\uFF0C\u8BF7\u5C06\u793A\u4F8B\u653E\u8FDB\u4EE3\u7801\u5757");
-  return `**${paragraphTitle(title)}** ^${id}
-
-${body.trimEnd()}${body.trimEnd() ? "\n\n" : ""}`;
+// src/thought-migration.ts
+function stripBrainOSProperties(markdown) {
+  const header = markdown.match(/^---\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/);
+  if (!header || !/^brainos_type:\s*thought-file\s*$/m.test(header[1])) return markdown;
+  const owned = /^(brainos_type|brainos_version|id|title|created_at|updated_at|status|source):/;
+  let skipping = false;
+  const remaining = header[1].split(/\r?\n/).filter((line) => {
+    if (/^\S/.test(line)) skipping = owned.test(line);
+    return !skipping;
+  }).join("\n").trim();
+  return (remaining ? "---\n" + remaining + "\n---\n\n" : "") + markdown.slice(header[0].length).trimStart();
 }
-function initializeThoughtDocument(markdown) {
-  if (isThoughtDocument(markdown)) return markdown;
-  return markdown.trimEnd() + "\n\n## \u8282\u70B9\n\n";
+function uniqueLegacyTitle(title, used) {
+  const base = title.trim().replace(/[\r\n]+/g, " ") || "\u672A\u547D\u540D\u8282\u70B9";
+  let value = base, number = 2;
+  while (used.has(value)) value = base + "\uFF08" + number++ + "\uFF09";
+  used.add(value);
+  return value;
 }
-function anchorThoughtNodes(markdown) {
-  let text = markdown;
-  for (const node of parseThoughtDocument(markdown).nodes.filter((node2) => node2.needsAnchor).reverse()) {
-    const end = markdown.indexOf("\n", node.start);
-    const after = end < 0 ? node.end : end;
-    text = text.slice(0, node.start) + `**${paragraphTitle(node.title)}** ^${node.id}` + text.slice(after);
+function convertParagraphThought(original) {
+  var _a, _b, _c;
+  if (!markdownLines(original).some((line) => !line.code && /^## 节点\s*$/.test(line.text))) return void 0;
+  const doc = parseThoughtDocument2(original);
+  if (!doc.sections.\u8282\u70B9) return void 0;
+  const used = /* @__PURE__ */ new Set(), aliases = /* @__PURE__ */ new Map();
+  for (const node of doc.nodes) aliases.set(node.id, uniqueLegacyTitle(node.title, used));
+  const localName = (target) => {
+    var _a2, _b2;
+    return target.startsWith("#^") ? aliases.get(target.slice(2)) : target.startsWith("#") ? aliases.get((_b2 = (_a2 = doc.nodes.find((node) => node.title === target.slice(1))) == null ? void 0 : _a2.id) != null ? _b2 : "") : void 0;
+  };
+  const step = (target, label) => {
+    var _a2;
+    return (_a2 = localName(target)) != null ? _a2 : wikiLink(target, label != null ? label : target);
+  };
+  let markdown = stripBrainOSProperties(original.slice(0, doc.sections.\u8282\u70B9.start)).trimEnd();
+  const introduction = original.slice(doc.sections.\u8282\u70B9.content, (_b = (_a = doc.nodes[0]) == null ? void 0 : _a.start) != null ? _b : doc.sections.\u8282\u70B9.end).trim();
+  if (introduction) markdown += "\n\n" + introduction + "\n";
+  for (const node of doc.nodes) {
+    let body = node.body;
+    for (const link of documentLinks(body).reverse()) {
+      const title = localName(link.target);
+      if (title) body = body.slice(0, link.start) + wikiLink("#" + title, (_c = link.label) != null ? _c : title) + body.slice(link.end);
+    }
+    markdown = appendDocumentStep(markdown, aliases.get(node.id), body, true);
   }
-  return text;
-}
-function insertDocumentNode(markdown, id, title, body = "") {
-  const text = initializeThoughtDocument(markdown), parsed = parseThoughtDocument(text);
-  if (parsed.nodes.some((node) => node.id === id)) throw new Error("\u8282\u70B9\u6807\u8BC6\u5DF2\u5B58\u5728");
-  const end = parsed.sections.\u8282\u70B9.end;
-  const before = text.slice(0, end).trimEnd();
-  return before + "\n\n" + renderNode(id, title, body) + text.slice(end);
-}
-function updateDocumentNode(markdown, id, title, body, expected) {
-  const node = parseThoughtDocument(markdown).nodes.find((node2) => node2.id === id);
-  if (!node) throw new Error("\u8282\u70B9\u5DF2\u4E0D\u5B58\u5728\uFF0C\u8BF7\u5237\u65B0\u540E\u91CD\u8BD5");
-  if (expected && (node.title !== expected.title || node.body !== expected.body)) throw new Error("\u8282\u70B9\u5DF2\u5728\u5176\u4ED6\u4F4D\u7F6E\u4FEE\u6539\uFF0C\u8BF7\u91CD\u65B0\u6253\u5F00\u7F16\u8F91\uFF0C\u907F\u514D\u8986\u76D6\u5185\u5BB9");
-  return markdown.slice(0, node.start) + renderNode(id, title, body) + markdown.slice(node.end);
-}
-function wikiLink(target, title) {
-  if (/[\[\]\r\n|]/.test(target)) throw new Error("\u94FE\u63A5\u8DEF\u5F84\u542B\u6709\u4E0D\u652F\u6301\u7684\u5B57\u7B26");
-  const label = title.replace(/[\[\]|\r\n]/g, " ");
-  return `[[${target}|${label}]]`;
-}
-function localTarget(owner, key) {
-  const ref = splitNodeKey(key);
-  if ((ref == null ? void 0 : ref.file) === owner) return `#^${ref.id}`;
-  return key;
-}
-function appendSectionLine(markdown, section, line) {
-  const region = parseThoughtDocument(markdown).sections[section];
-  if (!region) return markdown.trimEnd() + `
-
-## ${section}
-
-${line}
-`;
-  return markdown.slice(0, region.end).trimEnd() + `
-${line}
-
-` + markdown.slice(region.end);
-}
-function insertDocumentReference(markdown, target, label) {
-  if (parseThoughtDocument(markdown).references.some((ref) => ref.target === target)) return markdown;
-  return appendSectionLine(markdown, "\u5F15\u7528", `- ${wikiLink(target, label)}`);
-}
-function insertDocumentRelation(markdown, from, fromTitle, to, toTitle) {
-  if (from === to) return markdown;
-  if (parseThoughtDocument(markdown).relations.some((edge) => edge.from === from && edge.to === to)) return markdown;
-  return appendSectionLine(markdown, "\u5173\u7CFB", `- ${wikiLink(from, fromTitle)} \u2192 ${wikiLink(to, toTitle)}`);
-}
-function removeDocumentRelation(markdown, matches) {
-  const spans = parseThoughtDocument(markdown).relations.filter((edge) => matches(edge.from, edge.to)).sort((a, b) => b.start - a.start);
-  let text = markdown;
-  for (const span of spans) text = text.slice(0, span.start) + text.slice(span.end);
-  return text;
-}
-function unlinkDocumentBody(markdown, nodeID, matches) {
-  var _a;
-  const node = parseThoughtDocument(markdown).nodes.find((node2) => node2.id === nodeID);
-  if (!node) return markdown;
-  let body = node.body;
-  for (const link of documentLinks(body).filter((link2) => matches(link2.target)).sort((a, b) => b.start - a.start)) body = body.slice(0, link.start) + ((_a = link.label) != null ? _a : link.target) + body.slice(link.end);
-  return updateDocumentNode(markdown, node.id, node.title, body);
-}
-function removeDocumentReference(markdown, matches) {
-  var _a;
-  const doc = parseThoughtDocument(markdown);
-  let text = markdown;
-  for (const link of doc.references.filter((link2) => matches(link2.target)).sort((a, b) => b.start - a.start)) {
-    text = text.slice(0, link.start) + ((_a = link.label) != null ? _a : link.target) + text.slice(link.end);
+  for (const reference of doc.references) markdown = appendDocumentStep(markdown, step(reference.target, reference.label), "", true);
+  for (const relation of doc.relations) {
+    markdown = appendDocumentStep(markdown, step(relation.from), "", true);
+    markdown = appendDocumentStep(markdown, step(relation.to));
   }
-  return text;
+  for (const [name, section] of Object.entries(doc.sections)) {
+    if (name === "\u8282\u70B9" || !section) continue;
+    let prose = original.slice(section.content, section.end);
+    const structural = name === "\u5173\u7CFB" ? doc.relations : doc.references;
+    for (const span of [...structural].sort((a, b) => b.start - a.start)) {
+      const start = span.start - section.content, end = span.end - section.content;
+      prose = prose.slice(0, start) + prose.slice(end);
+    }
+    prose = prose.replace(/^\s*-\s*$/gm, "").trim();
+    if (prose) markdown += "\n\n" + prose + "\n";
+  }
+  return { markdown, aliases };
 }
 
 // src/thought-store.ts
@@ -252,228 +432,267 @@ function requireFile(app, path) {
   if (!(file instanceof import_obsidian.TFile) || file.extension !== "md") throw new Error("\u601D\u8003\u6587\u4EF6\u5DF2\u4E0D\u5B58\u5728");
   return file;
 }
-function stableID(key) {
-  let a = 2166136261, b = 2246822507;
-  for (let index = 0; index < key.length; index++) {
-    a = Math.imul(a ^ key.charCodeAt(index), 16777619);
-    b = Math.imul(b ^ key.charCodeAt(index), 3266489909);
-  }
-  return `node-legacy-${(a >>> 0).toString(16)}${(b >>> 0).toString(16)}`;
-}
-function markThought(markdown) {
-  const frontmatter = markdown.match(/^---\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)/);
-  if (!frontmatter) return `---
-brainos_type: thought-file
-brainos_version: 2
----
-
-${markdown}`;
-  let header = frontmatter[0];
-  if (!/^brainos_type:/m.test(header)) header = header.replace(/^---\r?\n/, "---\nbrainos_type: thought-file\n");
-  if (!/^brainos_version:/m.test(header)) header = header.replace(/^---\r?\n/, "---\nbrainos_version: 2\n");
-  return header + markdown.slice(frontmatter[0].length);
-}
 async function loadThoughtDocument(app, file) {
   var _a, _b, _c, _d, _e, _f;
   const original = await app.vault.cachedRead(file);
-  if (isThoughtDocument(original)) return { original, markdown: original, doc: parseThoughtDocument(original), legacy: false };
-  const state = parseThoughtState(original);
+  const paragraphs = convertParagraphThought(original);
+  if (paragraphs) return { original, ...paragraphs, doc: parseThoughtDocument(paragraphs.markdown), legacy: true };
+  const state = parseThoughtState(original), aliases = /* @__PURE__ */ new Map();
   if (LEGACY_STATE.test(original) && !state) throw new Error("\u65E7\u601D\u8003\u72B6\u6001\u635F\u574F\uFF0C\u539F\u6587\u4EF6\u672A\u4FEE\u6539");
-  const draft = ((_a = state == null ? void 0 : state.draft) == null ? void 0 : _a.trim()) ? `
-
-## \u8349\u7A3F
-
-${state.draft}` : "";
-  let markdown = initializeThoughtDocument(original.replace(LEGACY_STATE, () => draft).trimEnd());
-  if (!state) return { original, markdown, doc: parseThoughtDocument(markdown), legacy: false };
+  if (!state) return { original, markdown: original, doc: parseThoughtDocument(original), legacy: false, aliases };
+  let markdown = stripBrainOSProperties(original.replace(LEGACY_STATE, "")).trimEnd();
+  if ((_a = state.draft) == null ? void 0 : _a.trim()) markdown += "\n\n" + state.draft.trim() + "\n";
   const byLegacyID = new Map(app.vault.getMarkdownFiles().flatMap((atom) => {
     var _a2, _b2;
     const id = (_b2 = (_a2 = app.metadataCache.getFileCache(atom)) == null ? void 0 : _a2.frontmatter) == null ? void 0 : _b2.brainos_id;
     return id == null ? [] : [[String(id).toLowerCase(), atom]];
   }));
-  const imported = /* @__PURE__ */ new Map();
+  const imported = /* @__PURE__ */ new Map(), used = /* @__PURE__ */ new Set();
   for (const path of (_b = state.paths) != null ? _b : []) {
-    let previous;
+    let newPath = true;
     for (const step of (_c = path.steps) != null ? _c : []) {
       const key = stepKey(step);
       if (!key) {
-        previous = void 0;
+        newPath = true;
         continue;
       }
       const direct = app.vault.getAbstractFileByPath(key);
       const atom = direct instanceof import_obsidian.TFile ? direct : (_d = byLegacyID.get(key.toLowerCase())) != null ? _d : app.metadataCache.getFirstLinkpathDest(key, file.path);
-      const identity = (_e = atom == null ? void 0 : atom.path) != null ? _e : key;
-      let current = imported.get(identity);
-      if (!current) {
-        current = { id: stableID(identity), title: (_f = atom == null ? void 0 : atom.basename) != null ? _f : key };
-        const body = atom && atom.path !== file.path ? await app.vault.cachedRead(atom) : atom ? "" : `\u539F\u8282\u70B9\u5F15\u7528\uFF1A${key}`;
-        markdown = insertDocumentNode(markdown, current.id, current.title, body);
-        imported.set(identity, current);
-      }
-      if (previous && previous.id !== current.id) markdown = insertDocumentRelation(markdown, `#^${previous.id}`, previous.title, `#^${current.id}`, current.title);
-      previous = current;
+      const identity = (_e = atom == null ? void 0 : atom.path) != null ? _e : key, known = imported.get(identity);
+      const title = known != null ? known : uniqueLegacyTitle((_f = atom == null ? void 0 : atom.basename) != null ? _f : key, used);
+      imported.set(identity, title);
+      const body = known ? "" : atom && atom.path !== file.path ? await app.vault.cachedRead(atom) : atom ? "" : "\u539F\u8282\u70B9\u5F15\u7528\uFF1A" + key;
+      markdown = appendDocumentStep(markdown, title, body, newPath);
+      newPath = false;
     }
   }
-  return { original, markdown, doc: parseThoughtDocument(markdown), legacy: true };
+  return { original, markdown, doc: parseThoughtDocument(markdown), legacy: true, aliases };
 }
 async function mutateThought(app, filePath, edit) {
   const file = requireFile(app, filePath), loaded = await loadThoughtDocument(app, file);
   await app.vault.process(file, (current) => {
     if (loaded.legacy && current !== loaded.original) throw new Error("\u65E7\u601D\u8003\u5728\u8F6C\u6362\u671F\u95F4\u5DF2\u53D8\u5316\uFF0C\u8BF7\u5237\u65B0\u540E\u91CD\u8BD5");
-    if (!loaded.legacy && LEGACY_STATE.test(current) && !isThoughtDocument(current)) throw new Error("\u601D\u8003\u683C\u5F0F\u5DF2\u53D8\u5316\uFF0C\u8BF7\u5237\u65B0\u540E\u91CD\u8BD5");
-    const before = loaded.legacy ? loaded.markdown : initializeThoughtDocument(current);
-    const next = edit(anchorThoughtNodes(before));
+    if (!loaded.legacy && (LEGACY_STATE.test(current) || convertParagraphThought(current))) throw new Error("\u601D\u8003\u683C\u5F0F\u5DF2\u53D8\u5316\uFF0C\u8BF7\u5237\u65B0\u540E\u91CD\u8BD5");
+    const next = edit(loaded.legacy ? loaded.markdown : current, loaded);
     parseThoughtDocument(next);
-    return markThought(next);
+    return next;
+  });
+  if (loaded.legacy && loaded.aliases.size) await migrateIncomingAnchors(app, filePath, loaded.aliases);
+}
+async function migrateIncomingAnchors(app, source, aliases) {
+  const rewrite = (markdown, owner) => {
+    var _a, _b;
+    let next = markdown;
+    for (const link of documentLinks(markdown).reverse()) {
+      const target = referenceFile(app, owner, link.target);
+      const title = target.anchor.startsWith("^") ? aliases.get(target.anchor.slice(1)) : void 0;
+      if (((_a = target.file) == null ? void 0 : _a.path) !== source || !title) continue;
+      next = next.slice(0, link.start) + wikiLink(target.rawPath + "#" + title, (_b = link.label) != null ? _b : title) + next.slice(link.end);
+    }
+    return next;
+  };
+  for (const file of app.vault.getMarkdownFiles()) {
+    const before = await app.vault.cachedRead(file);
+    if (rewrite(before, file.path) !== before) await app.vault.process(file, (current) => rewrite(current, file.path));
+  }
+}
+function findNode(loaded, id) {
+  var _a;
+  return (_a = loaded.doc.nodes.find((node) => node.id === id)) != null ? _a : loaded.doc.nodes.find((node) => {
+    var _a2;
+    return node.id === titleID((_a2 = loaded.aliases.get(id)) != null ? _a2 : "");
   });
 }
 function referenceFile(app, owner, target) {
-  const hash2 = target.indexOf("#");
-  const rawPath = hash2 >= 0 ? target.slice(0, hash2) : target;
+  const hash2 = target.indexOf("#"), rawPath = hash2 >= 0 ? target.slice(0, hash2) : target;
   const anchor = hash2 >= 0 ? target.slice(hash2 + 1) : "";
   const direct = app.vault.getAbstractFileByPath(rawPath || owner);
   const file = direct instanceof import_obsidian.TFile ? direct : app.metadataCache.getFirstLinkpathDest(rawPath, owner);
   return { file: file instanceof import_obsidian.TFile ? file : void 0, anchor, rawPath };
 }
-function referenceKey(app, owner, target) {
-  var _a;
-  const { file, anchor, rawPath } = referenceFile(app, owner, target);
-  const path = (_a = file == null ? void 0 : file.path) != null ? _a : rawPath || owner;
-  return anchor.startsWith("^") ? nodeKey(path, anchor.slice(1)) : anchor ? `${path}#${anchor}` : path;
+async function resolveTarget(app, owner, target, label, read = (file) => loadThoughtDocument(app, file), nodeReference = false) {
+  const { file, anchor } = referenceFile(app, owner, target);
+  if ((file == null ? void 0 : file.extension) === "md") {
+    const loaded = await read(file);
+    let node;
+    if (anchor.startsWith("^")) node = findNode(loaded, anchor.slice(1));
+    else if (anchor) node = loaded.doc.nodes.find((node2) => !node2.target && node2.title === anchor);
+    else if (label && nodeReference) node = loaded.doc.nodes.find((node2) => !node2.target && node2.title === label);
+    if (!node && anchor.startsWith("^") && label) node = loaded.doc.nodes.find((node2) => !node2.target && node2.title === label);
+    if (node) return { key: nodeKey(file.path, node.id), file, node };
+  }
+  const name = nodeReference && label && !anchor ? "#brainos=" + encodeURIComponent(titleID(label)) : "";
+  return { key: file ? file.path + (anchor ? "#" + anchor : name) : target + name, file, anchor, nodeReference };
 }
-async function readThoughtNode(app, key) {
+async function readThoughtNode(app, key, ordinal) {
   const ref = splitNodeKey(key);
   if (!ref) throw new Error("\u8BF7\u9009\u62E9\u601D\u8003\u6587\u4EF6\u4E2D\u7684\u8282\u70B9");
   const file = requireFile(app, ref.file), loaded = await loadThoughtDocument(app, file);
-  const node = loaded.doc.nodes.find((node2) => node2.id === ref.id);
-  if (!node) throw new Error("\u6765\u6E90\u8282\u70B9\u5DF2\u4E0D\u5B58\u5728");
-  return { file, node };
+  const node = findNode(loaded, ref.id);
+  if (!node || node.target) throw new Error("\u6765\u6E90\u8282\u70B9\u5DF2\u4E0D\u5B58\u5728");
+  const visit = node.occurrences[ordinal != null ? ordinal : node.occurrences.length - 1];
+  if (!visit) throw new Error("\u8FD9\u6B21\u8BB0\u5F55\u5DF2\u4E0D\u5B58\u5728\uFF0C\u8BF7\u5237\u65B0\u540E\u91CD\u8BD5");
+  return { file, occurrences: node.occurrences, node: {
+    ...node,
+    body: visit.body,
+    start: visit.start,
+    ordinal: visit.ordinal,
+    revision: nodeRevision(node)
+  } };
 }
-async function ensureNodeAnchor(app, key) {
-  if (!splitNodeKey(key)) return;
-  const source = await readThoughtNode(app, key);
-  const loaded = await loadThoughtDocument(app, source.file);
-  if (loaded.legacy || source.node.needsAnchor) await mutateThought(app, source.file.path, (text) => text);
-}
-async function canonicalReferences(app, owner) {
-  const loaded = await loadThoughtDocument(app, requireFile(app, owner));
-  const targets = /* @__PURE__ */ new Set([
-    ...loaded.doc.references.map((link) => link.target),
-    ...loaded.doc.relations.flatMap((edge) => [edge.from, edge.to]),
-    ...loaded.doc.nodes.flatMap((node) => documentLinks(node.body).map((link) => link.target))
-  ]);
-  const keys = /* @__PURE__ */ new Map();
-  for (const target of targets) {
-    const { file, anchor } = referenceFile(app, owner, target);
-    if ((file == null ? void 0 : file.extension) === "md" && anchor && !anchor.startsWith("^")) {
-      const document = await loadThoughtDocument(app, file);
-      const node = document.doc.nodes.find((node2) => node2.title === anchor);
-      if (node) {
-        keys.set(target, nodeKey(file.path, node.id));
-        continue;
-      }
-    }
-    keys.set(target, referenceKey(app, owner, target));
+function graphEntry(owner, node, markdown) {
+  const ref = splitNodeKey(node.path);
+  if ((ref == null ? void 0 : ref.file) === owner || node.ownerPath === owner) {
+    const found = parseThoughtDocument(markdown).nodes.find((value) => value.id === (ref == null ? void 0 : ref.id));
+    if (!found || found.target) throw new Error("\u8D77\u70B9\u8282\u70B9\u5DF2\u53D8\u5316\uFF0C\u8BF7\u5237\u65B0\u540E\u91CD\u8BD5");
+    return found.title;
   }
-  return (target) => {
-    var _a;
-    return (_a = keys.get(target)) != null ? _a : referenceKey(app, owner, target);
-  };
+  if (!node.ownerPath) throw new Error("\u6765\u6E90\u8282\u70B9\u5DF2\u4E0D\u5B58\u5728");
+  return wikiLink(node.ownerPath, node.label);
 }
 async function createThoughtNode(app, owner, title, body = "", parent) {
   var _a;
-  const id = newNodeID(), key = nodeKey(owner, id);
-  if (parent && ((_a = splitNodeKey(parent.key)) == null ? void 0 : _a.file) !== owner) await ensureNodeAnchor(app, parent.key);
-  await mutateThought(app, owner, (markdown) => {
-    let text = insertDocumentNode(markdown, id, title, body);
-    if (parent) text = insertDocumentRelation(text, localTarget(owner, parent.key), parent.title, `#^${id}`, title);
-    return text;
+  const value = cleanNodeTitle(title);
+  if ((_a = parseThoughtDocument("- " + value).nodes[0]) == null ? void 0 : _a.target) throw new Error("\u8282\u70B9\u540D\u79F0\u4E0D\u80FD\u662F\u5B8C\u6574\u7684\u6587\u4EF6\u5F15\u7528\uFF0C\u8BF7\u4F7F\u7528\u5F15\u7528\u5DF2\u6709\u8282\u70B9");
+  await mutateThought(app, owner, (markdown, loaded) => {
+    let from;
+    if (parent) {
+      const ref = splitNodeKey(parent.key);
+      const actual = (ref == null ? void 0 : ref.file) === owner ? findNode({ ...loaded, doc: parseThoughtDocument(markdown) }, ref.id) : void 0;
+      from = actual ? occurrenceTitle(actual) : graphEntry(owner, { path: parent.key, label: parent.title, ownerPath: ref == null ? void 0 : ref.file }, markdown);
+    }
+    if (from && (parent == null ? void 0 : parent.newPath)) return appendDocumentStep(appendDocumentStep(markdown, from, "", true), value, body);
+    return appendDocumentContinuation(markdown, from, value, body);
   });
-  return key;
+  return nodeKey(owner, titleID(value));
 }
 async function editThoughtNode(app, key, title, body, expected) {
   const ref = splitNodeKey(key);
   if (!ref) throw new Error("\u8BF7\u9009\u62E9\u601D\u8003\u6587\u4EF6\u4E2D\u7684\u8282\u70B9");
-  await mutateThought(app, ref.file, (text) => updateDocumentNode(text, ref.id, title, body, expected));
+  const value = cleanNodeTitle(title);
+  let oldTitle = "";
+  await mutateThought(app, ref.file, (text, loaded) => {
+    const actual = findNode({ ...loaded, doc: parseThoughtDocument(text) }, ref.id);
+    if (!actual) throw new Error("\u8282\u70B9\u5DF2\u4E0D\u5B58\u5728\uFF0C\u8BF7\u5237\u65B0\u540E\u91CD\u8BD5");
+    oldTitle = actual.title;
+    return updateDocumentNode(text, actual.id, value, body, expected);
+  });
+  if (oldTitle !== value) await renameIncomingReferences(app, ref.file, oldTitle, value);
+  return nodeKey(ref.file, titleID(value));
+}
+async function renameIncomingReferences(app, source, oldTitle, title) {
+  const rewrite = (markdown, owner) => {
+    var _a;
+    let next = markdown;
+    for (const link of documentLinks(markdown).reverse()) {
+      const target = referenceFile(app, owner, link.target);
+      if (((_a = target.file) == null ? void 0 : _a.path) !== source) continue;
+      let path = link.target, label = link.label;
+      if (target.anchor === oldTitle || target.anchor.startsWith("^") && label === oldTitle) {
+        path = target.rawPath + "#" + title;
+        if (label === oldTitle) label = title;
+      } else if (!target.anchor && label === oldTitle) label = title;
+      else continue;
+      next = next.slice(0, link.start) + wikiLink(path, label != null ? label : title) + next.slice(link.end);
+    }
+    return next;
+  };
+  for (const file of app.vault.getMarkdownFiles()) {
+    const before = await app.vault.cachedRead(file);
+    if (rewrite(before, file.path) === before) continue;
+    await app.vault.process(file, (current) => rewrite(current, file.path));
+  }
 }
 async function linkThoughtNodes(app, owner, from, to) {
-  if (from.ownerPath !== owner) await ensureNodeAnchor(app, from.path);
-  if (to.ownerPath !== owner) await ensureNodeAnchor(app, to.path);
-  await mutateThought(app, owner, (text) => insertDocumentRelation(text, localTarget(owner, from.path), from.label, localTarget(owner, to.path), to.label));
+  await mutateThought(app, owner, (text) => appendDocumentContinuation(text, graphEntry(owner, from, text), graphEntry(owner, to, text)));
 }
 async function referenceThoughtNode(app, owner, node, parent) {
   if (!node.nodeId || !node.ownerPath) throw new Error("\u8BF7\u9009\u62E9\u601D\u8003\u6587\u4EF6\u4E2D\u7684\u8282\u70B9");
-  await ensureNodeAnchor(app, node.path);
-  if (parent && parent.ownerPath !== owner) await ensureNodeAnchor(app, parent.path);
-  await mutateThought(app, owner, (text) => {
-    if (parent) return insertDocumentRelation(text, localTarget(owner, parent.path), parent.label, localTarget(owner, node.path), node.label);
-    return insertDocumentReference(text, localTarget(owner, node.path), node.label);
-  });
+  await readThoughtNode(app, node.path);
+  await mutateThought(app, owner, (text) => appendDocumentContinuation(
+    text,
+    parent ? graphEntry(owner, parent, text) : void 0,
+    graphEntry(owner, node, text)
+  ));
+}
+async function referenceKeys(app, owner) {
+  const doc = (await loadThoughtDocument(app, requireFile(app, owner))).doc;
+  const entries = /* @__PURE__ */ new Map(), links = /* @__PURE__ */ new Map();
+  for (const node of doc.nodes) {
+    entries.set(node.id, node.target ? (await resolveTarget(app, owner, node.target, node.referenceLabel, void 0, node.referenceLabel !== void 0)).key : nodeKey(owner, node.id));
+    for (const visit of node.occurrences) for (const link of documentLinks(visit.body)) {
+      links.set(JSON.stringify([link.target, link.label]), (await resolveTarget(app, owner, link.target, link.label)).key);
+    }
+  }
+  return {
+    entry: (id) => {
+      var _a;
+      return (_a = entries.get(id)) != null ? _a : nodeKey(owner, id);
+    },
+    link: (target, label) => links.get(JSON.stringify([target, label]))
+  };
 }
 async function unlinkThoughtNodes(app, owner, from, to) {
-  const keyFor = await canonicalReferences(app, owner);
+  const keys = await referenceKeys(app, owner);
   await mutateThought(app, owner, (text) => {
-    let next = removeDocumentRelation(text, (a, b) => keyFor(a) === from && keyFor(b) === to);
-    const ref = splitNodeKey(from);
-    if ((ref == null ? void 0 : ref.file) === owner) next = unlinkDocumentBody(next, ref.id, (target) => keyFor(target) === to);
+    let next = removeDocumentRelation(text, (a, b) => keys.entry(a) === from && keys.entry(b) === to);
+    for (const node of parseThoughtDocument(next).nodes.filter((node2) => keys.entry(node2.id) === from)) {
+      next = unlinkDocumentBody(next, node.id, (target, label) => keys.link(target, label) === to);
+    }
     return next;
   });
 }
 async function removeThoughtNode(app, owner, key) {
-  const keyFor = await canonicalReferences(app, owner);
+  const keys = await referenceKeys(app, owner);
   await mutateThought(app, owner, (text) => {
-    const ref = splitNodeKey(key);
-    const parsed = parseThoughtDocument(text);
     let next = text;
-    if ((ref == null ? void 0 : ref.file) === owner) {
-      const node = parsed.nodes.find((node2) => node2.id === ref.id);
-      if (node) next = text.slice(0, node.start) + text.slice(node.end);
-    }
-    next = removeDocumentRelation(next, (a, b) => keyFor(a) === key || keyFor(b) === key);
-    next = removeDocumentReference(next, (target) => keyFor(target) === key);
-    for (const node of parseThoughtDocument(next).nodes) next = unlinkDocumentBody(next, node.id, (target) => keyFor(target) === key);
+    for (const node of parseThoughtDocument(next).nodes.filter((node2) => keys.entry(node2.id) === key)) next = removeDocumentNode(next, node.id);
+    for (const node of parseThoughtDocument(next).nodes) next = unlinkDocumentBody(next, node.id, (target, label) => keys.link(target, label) === key);
     return next;
   });
 }
 async function buildThoughtSnapshot(app, thoughtFile) {
-  const files = thoughtFile ? [thoughtFile] : app.vault.getMarkdownFiles().filter((file) => {
-    var _a, _b;
-    const cache = app.metadataCache.getFileCache(file);
-    return ((_a = cache == null ? void 0 : cache.frontmatter) == null ? void 0 : _a.brainos_type) === "thought-file" || Object.keys((_b = cache == null ? void 0 : cache.blocks) != null ? _b : {}).some((id) => id.startsWith("node-"));
-  });
+  var _a, _b;
   const nodes = /* @__PURE__ */ new Map(), edges = /* @__PURE__ */ new Map();
-  const thoughts = [];
+  const thoughts = [], steps = [];
   const loaded = /* @__PURE__ */ new Map();
   const read = (file) => {
     if (!loaded.has(file.path)) loaded.set(file.path, loadThoughtDocument(app, file));
     return loaded.get(file.path);
   };
-  const addNode = (file, node, membership) => {
+  const addNode = (file, node, owner) => {
     const key = nodeKey(file.path, node.id);
     let value = nodes.get(key);
     if (!value) {
-      value = { path: key, openPath: key, label: node.title, ownerPath: file.path, nodeId: node.id, x: NaN, y: NaN, degree: 0, thoughts: [], kind: "note" };
-      nodes.set(key, value);
-    }
-    if (!value.thoughts.includes(membership)) value.thoughts.push(membership);
-    return key;
-  };
-  const resolve = async (owner, target, label) => {
-    var _a;
-    const { file, anchor } = referenceFile(app, owner, target);
-    const key = referenceKey(app, owner, target);
-    if ((file == null ? void 0 : file.extension) === "md" && anchor) {
-      const doc = (await read(file)).doc;
-      const node = anchor.startsWith("^") ? doc.nodes.find((node2) => node2.id === anchor.slice(1)) : doc.nodes.find((node2) => node2.title === anchor);
-      if (node) return addNode(file, node, owner);
-    }
-    let value = nodes.get(key);
-    if (!value) {
-      const missing = !file || !!anchor;
       value = {
         path: key,
-        openPath: file ? key : target,
-        label: label != null ? label : anchor ? `\u5931\u6548\u5F15\u7528\uFF1A${anchor.replace(/^\^/, "")}` : (_a = file == null ? void 0 : file.basename) != null ? _a : target,
+        openPath: file.path,
+        label: node.title,
+        ownerPath: file.path,
+        nodeId: node.id,
+        x: NaN,
+        y: NaN,
+        degree: 0,
+        thoughts: [],
+        kind: "note"
+      };
+      nodes.set(key, value);
+    }
+    if (!value.thoughts.includes(owner)) value.thoughts.push(owner);
+    return key;
+  };
+  const resolve = async (owner, target, label, nodeReference = false) => {
+    var _a2, _b2;
+    const resolved = await resolveTarget(app, owner, target, label, read, nodeReference);
+    if (resolved.node && resolved.file) return addNode(resolved.file, resolved.node, owner);
+    const { key, file } = resolved;
+    let value = nodes.get(key);
+    if (!value) {
+      const missing = !file || !!resolved.anchor || !!resolved.nodeReference;
+      value = {
+        path: key,
+        openPath: (_a2 = file == null ? void 0 : file.path) != null ? _a2 : target,
+        label: label != null ? label : resolved.anchor ? "\u5931\u6548\u5F15\u7528\uFF1A" + resolved.anchor.replace(/^\^/, "") : (_b2 = file == null ? void 0 : file.basename) != null ? _b2 : target,
         ownerPath: file == null ? void 0 : file.path,
         kind: missing ? "unresolved" : file.extension === "md" ? "note" : "attachment",
         thoughts: [],
@@ -487,24 +706,27 @@ async function buildThoughtSnapshot(app, thoughtFile) {
     return key;
   };
   const addEdge = (owner, from, to) => {
-    var _a;
+    var _a2;
     if (from === to) return;
-    const key = JSON.stringify([from, to]);
-    const edge = (_a = edges.get(key)) != null ? _a : { from, to, thoughts: [] };
+    const key = JSON.stringify([from, to]), edge = (_a2 = edges.get(key)) != null ? _a2 : { from, to, thoughts: [] };
     if (!edge.thoughts.includes(owner)) edge.thoughts.push(owner);
     edges.set(key, edge);
   };
-  for (const file of files) {
+  for (const file of thoughtFile ? [thoughtFile] : app.vault.getMarkdownFiles()) {
     const document = await read(file);
+    const marked = ((_b = (_a = app.metadataCache.getFileCache(file)) == null ? void 0 : _a.frontmatter) == null ? void 0 : _b.brainos_type) === "thought-file";
+    if (!thoughtFile && !document.doc.occurrences.length && !document.legacy && !marked) continue;
     thoughts.push({ path: file.path, title: file.basename });
-    for (const node of document.doc.nodes) addNode(file, node, file.path);
-    for (const ref of document.doc.references) await resolve(file.path, ref.target, ref.label);
-    for (const relation of document.doc.relations) addEdge(file.path, await resolve(file.path, relation.from), await resolve(file.path, relation.to));
-    for (const node of document.doc.nodes) {
-      for (const link of documentLinks(node.body)) addEdge(file.path, nodeKey(file.path, node.id), await resolve(file.path, link.target, link.label));
+    const keys = /* @__PURE__ */ new Map();
+    for (const node of document.doc.nodes) keys.set(node.id, node.target ? await resolve(file.path, node.target, node.referenceLabel, node.referenceLabel !== void 0) : addNode(file, node, file.path));
+    for (const relation of document.doc.relations) addEdge(file.path, keys.get(relation.from), keys.get(relation.to));
+    for (const visit of document.doc.occurrences) {
+      const key = keys.get(visit.id);
+      steps.push({ key, title: visit.title, body: visit.body, thoughtPath: file.path, pathIndex: visit.path, ordinal: visit.ordinal });
+      for (const link of documentLinks(visit.body)) addEdge(file.path, key, await resolve(file.path, link.target, link.label));
     }
-    if (!document.doc.nodes.length && ![...nodes.values()].some((node) => node.thoughts.includes(file.path))) nodes.set(`thought:${file.path}`, {
-      path: `thought:${file.path}`,
+    if (!document.doc.nodes.length) nodes.set("thought:" + file.path, {
+      path: "thought:" + file.path,
       label: file.basename,
       openPath: file.path,
       ownerPath: file.path,
@@ -519,11 +741,11 @@ async function buildThoughtSnapshot(app, thoughtFile) {
     nodes.get(edge.from).degree++;
     nodes.get(edge.to).degree++;
   }
-  return { nodes: [...nodes.values()], edges: [...edges.values()], thoughts };
+  return { nodes: [...nodes.values()], edges: [...edges.values()], thoughts, steps };
 }
 
 // src/thoughts.ts
-var DEFAULT_NOTE_FOLDER = "BrainOS/Thoughts";
+var DEFAULT_NOTE_FOLDER = "";
 var STATE_BLOCK = /<!--\s*brainos-state\s*\n([\s\S]*?)\n-->/;
 function nodeTitle(value) {
   return value.replace(/[\\/:*?"<>|\r\n]/g, "-").trim().replace(/[. ]+$/g, "") || "\u672A\u547D\u540D";
@@ -547,10 +769,13 @@ function parseThoughtState(markdown) {
   }
 }
 function targetFolder(folder) {
-  return (0, import_obsidian2.normalizePath)(folder.trim().replace(/^\/+|\/+$/g, "")) || DEFAULT_NOTE_FOLDER;
+  const value = folder.trim().replace(/\\/g, "/").replace(/^\/+|\/+$/g, "");
+  if (value.split("/").some((part) => part === ".." || part === ".")) throw new Error("\u8BF7\u4F7F\u7528\u7B14\u8BB0\u5E93\u5185\u7684\u6587\u4EF6\u5939\u8DEF\u5F84");
+  return value ? (0, import_obsidian2.normalizePath)(value) : "";
 }
 async function ensureFolder(app, folder) {
   const normalized = targetFolder(folder);
+  if (!normalized) return;
   let current = "";
   for (const part of normalized.split("/")) {
     current = current ? `${current}/${part}` : part;
@@ -563,33 +788,16 @@ var ThoughtFileExistsError = class extends Error {
     this.path = path;
   }
 };
-async function createThought(app, title, folder, source = "") {
+async function createThought(app, title, folder) {
   const normalized = targetFolder(folder);
   await ensureFolder(app, normalized);
   const name = title.trim() || "\u672A\u547D\u540D\u601D\u8003";
-  const path = (0, import_obsidian2.normalizePath)(`${normalized}/${nodeTitle(name)}.md`);
+  const path = (0, import_obsidian2.normalizePath)((normalized ? normalized + "/" : "") + nodeTitle(name) + ".md");
   if (app.vault.getAbstractFileByPath(path)) throw new ThoughtFileExistsError(path);
-  title = name;
-  const now = (/* @__PURE__ */ new Date()).toISOString();
-  return app.vault.create(path, `---
-brainos_type: thought-file
-brainos_version: 2
-id: ${crypto.randomUUID()}
-title: ${JSON.stringify(title)}
-created_at: ${now}
-updated_at: ${now}
-status: active
-${source.trim() ? `source: ${JSON.stringify(source.trim())}
-` : ""}---
-
-# ${title}
-
-## \u8282\u70B9
-
-`);
+  return app.vault.create(path, "");
 }
 
-// layout-worker:/Users/othnielsu/Documents/repo/brainos-obsidian/src/layout-worker.ts
+// layout-worker:/workspace/brainos-obsidian/src/layout-worker.ts
 var layout_worker_default = '"use strict";\n(() => {\n  var __defProp = Object.defineProperty;\n  var __defNormalProp = (obj, key, value) => key in obj ? __defProp(obj, key, { enumerable: true, configurable: true, writable: true, value }) : obj[key] = value;\n  var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "symbol" ? key + "" : key, value);\n\n  // src/force-layout.ts\n  var DEFAULT_FORCE_OPTIONS = Object.freeze({\n    centerStrength: 0.1,\n    repelStrength: 1e3,\n    linkStrength: 1,\n    linkDistance: 250\n  });\n  var _ForceLayout = class _ForceLayout {\n    constructor(options = {}) {\n      __publicField(this, "particles", []);\n      __publicField(this, "byId", /* @__PURE__ */ new Map());\n      __publicField(this, "links", []);\n      __publicField(this, "topology", "");\n      __publicField(this, "alpha", 0);\n      __publicField(this, "alphaTarget", 0);\n      __publicField(this, "options", { ...DEFAULT_FORCE_OPTIONS });\n      this.configure(options);\n    }\n    configure(options) {\n      const next = { ...this.options };\n      for (const key of Object.keys(next)) {\n        const value = options[key];\n        if (value !== void 0 && Number.isFinite(value)) {\n          next[key] = key === "linkDistance" ? clamp(value, 1, 1e4) : clamp(value, 0, key === "repelStrength" ? 1e6 : 10);\n        }\n      }\n      const changed = Object.keys(next).some((key) => next[key] !== this.options[key]);\n      this.options = next;\n      if (changed) this.reheat(0.3);\n    }\n    reset() {\n      this.particles = [];\n      this.byId.clear();\n      this.links = [];\n      this.topology = "";\n      this.alpha = 0;\n      this.alphaTarget = 0;\n    }\n    sync(nodes2, edges, saved) {\n      var _a;\n      const ids = [...new Set(nodes2.map((node) => node.path))].sort();\n      const idSet = new Set(ids);\n      const uniqueEdges = /* @__PURE__ */ new Map();\n      for (const edge of edges) {\n        if (edge.from !== edge.to && idSet.has(edge.from) && idSet.has(edge.to)) uniqueEdges.set(JSON.stringify([edge.from, edge.to]), edge);\n      }\n      const sortedEdges = [...uniqueEdges.entries()].sort(([a], [b]) => a.localeCompare(b));\n      const topology = JSON.stringify([ids, sortedEdges.map(([key]) => key)]);\n      const changed = topology !== this.topology;\n      const firstGraph = this.particles.length === 0;\n      this.topology = topology;\n      for (const id of this.byId.keys()) if (!idSet.has(id)) this.byId.delete(id);\n      const nodeById = new Map(nodes2.map((node) => [node.path, node]));\n      const adjacency = /* @__PURE__ */ new Map();\n      for (const [, edge] of sortedEdges) {\n        if (!adjacency.has(edge.from)) adjacency.set(edge.from, []);\n        if (!adjacency.has(edge.to)) adjacency.set(edge.to, []);\n        adjacency.get(edge.from).push(edge.to);\n        adjacency.get(edge.to).push(edge.from);\n      }\n      const added = [];\n      for (const [index, id] of ids.entries()) {\n        if (this.byId.has(id)) continue;\n        const stored = saved[id];\n        const original = nodeById.get(id);\n        const explicit = validPoint(stored) ? stored : validPoint(original) && (original.x !== 0 || original.y !== 0) ? original : void 0;\n        const point = explicit != null ? explicit : seedPoint(id, index, ids.length);\n        this.byId.set(id, { id, index, x: point.x, y: point.y, vx: 0, vy: 0, degree: 0 });\n        if (!explicit) added.push(id);\n      }\n      const newSet = new Set(added);\n      for (const id of added) {\n        const neighbors = ((_a = adjacency.get(id)) != null ? _a : []).filter((other) => !newSet.has(other)).map((other) => this.byId.get(other));\n        if (!neighbors.length) continue;\n        const angle = hash(id) / 4294967296 * Math.PI * 2;\n        const point = this.byId.get(id);\n        const radius = 40 + hash(id + "radius") % 40;\n        point.x = neighbors.reduce((sum, node) => sum + node.x, 0) / neighbors.length + Math.cos(angle) * radius;\n        point.y = neighbors.reduce((sum, node) => sum + node.y, 0) / neighbors.length + Math.sin(angle) * radius;\n      }\n      this.particles = ids.map((id, index) => {\n        const particle = this.byId.get(id);\n        particle.index = index;\n        particle.degree = 0;\n        return particle;\n      });\n      for (const [, edge] of sortedEdges) {\n        this.byId.get(edge.from).degree++;\n        this.byId.get(edge.to).degree++;\n      }\n      this.links = sortedEdges.map(([, edge]) => {\n        const source = this.byId.get(edge.from), target = this.byId.get(edge.to);\n        return { source, target, bias: source.degree / (source.degree + target.degree), strength: 1 / Math.min(source.degree, target.degree) };\n      });\n      this.alphaTarget = this.particles.some((particle) => particle.fixed) ? 0.3 : 0;\n      if (!this.particles.length) this.alpha = 0;\n      else if (changed) this.reheat(firstGraph ? 1 : 0.3);\n      this.copyToNodes(nodes2);\n    }\n    /** Selection affects rendering only; it must not attract the whole graph. */\n    setSelected(_path) {\n    }\n    pin(path, position) {\n      const particle = this.byId.get(path);\n      if (!particle || !validPoint(position)) return;\n      particle.fixed = { ...position };\n      particle.x = position.x;\n      particle.y = position.y;\n      particle.vx = 0;\n      particle.vy = 0;\n      this.alphaTarget = 0.3;\n      this.reheat(0.3);\n    }\n    movePinned(path, position) {\n      const particle = this.byId.get(path);\n      if (!(particle == null ? void 0 : particle.fixed) || !validPoint(position)) return;\n      particle.fixed = { ...position };\n      particle.x = position.x;\n      particle.y = position.y;\n      particle.vx = 0;\n      particle.vy = 0;\n      this.alphaTarget = 0.3;\n      this.reheat(0.3);\n    }\n    unpin(path) {\n      const particle = this.byId.get(path);\n      if (!(particle == null ? void 0 : particle.fixed)) return;\n      particle.fixed = void 0;\n      particle.vx = 0;\n      particle.vy = 0;\n      this.alphaTarget = this.particles.some((node) => node.fixed) ? 0.3 : 0;\n      this.reheat(0.3);\n    }\n    reheat(alpha = 0.3) {\n      this.alpha = Math.max(this.alpha, clamp(finite(alpha, 0.3), 0, 1));\n    }\n    tick(nodes2) {\n      if (!this.isRunning) {\n        this.copyToNodes(nodes2);\n        return false;\n      }\n      this.alpha += (this.alphaTarget - this.alpha) * _ForceLayout.alphaDecay;\n      const center = this.options.centerStrength * this.alpha;\n      for (const particle of this.particles) {\n        particle.vx -= particle.x * center;\n        particle.vy -= particle.y * center;\n      }\n      for (const link of this.links) {\n        const a = link.source, b = link.target;\n        let dx = b.x + b.vx - a.x - a.vx, dy = b.y + b.vy - a.y - a.vy;\n        if (dx === 0 && dy === 0) {\n          const unit = direction(a.id, b.id);\n          dx = unit.x * 0.1;\n          dy = unit.y * 0.1;\n        }\n        const length = Math.hypot(dx, dy);\n        const factor = (length - this.options.linkDistance) / length * this.alpha * this.options.linkStrength * link.strength;\n        dx *= factor;\n        dy *= factor;\n        b.vx -= dx * link.bias;\n        b.vy -= dy * link.bias;\n        a.vx += dx * (1 - link.bias);\n        a.vy += dy * (1 - link.bias);\n      }\n      if (this.particles.length > 1 && this.options.repelStrength > 0) {\n        const tree = buildTree(this.particles);\n        const strength = this.options.repelStrength * this.alpha;\n        for (const particle of this.particles) this.repulse(particle, tree, strength);\n      }\n      this.collide();\n      for (const particle of this.particles) {\n        if (particle.fixed) {\n          particle.x = particle.fixed.x;\n          particle.y = particle.fixed.y;\n          particle.vx = 0;\n          particle.vy = 0;\n        } else {\n          particle.vx *= _ForceLayout.damping;\n          particle.vy *= _ForceLayout.damping;\n          particle.x += particle.vx;\n          particle.y += particle.vy;\n          if (!Number.isFinite(particle.x) || !Number.isFinite(particle.y) || Math.abs(particle.x) > 1e7 || Math.abs(particle.y) > 1e7) {\n            const seed = seedPoint(particle.id, particle.index, this.particles.length);\n            particle.x = seed.x;\n            particle.y = seed.y;\n            particle.vx = 0;\n            particle.vy = 0;\n          }\n        }\n      }\n      if (this.alphaTarget === 0 && this.alpha < _ForceLayout.alphaMin) this.alpha = 0;\n      this.copyToNodes(nodes2);\n      return this.isRunning;\n    }\n    snapshot() {\n      return Object.fromEntries(this.particles.map((particle) => [particle.id, { x: particle.x, y: particle.y }]));\n    }\n    get isRunning() {\n      return this.particles.length > 0 && (this.alpha >= _ForceLayout.alphaMin || this.alphaTarget > 0);\n    }\n    copyToNodes(nodes2) {\n      for (const node of nodes2) {\n        const point = this.byId.get(node.path);\n        if (point) {\n          node.x = point.x;\n          node.y = point.y;\n        }\n      }\n    }\n    repulse(particle, quad, strength) {\n      var _a;\n      if (!quad.count) return;\n      let dx = particle.x - quad.cx, dy = particle.y - quad.cy;\n      let squared = dx * dx + dy * dy;\n      const contains = particle.x >= quad.x && particle.x <= quad.x + quad.width && particle.y >= quad.y && particle.y <= quad.y + quad.width;\n      if (quad.children && !contains && quad.width * quad.width < _ForceLayout.thetaSquared * squared) {\n        const factor = strength * quad.count / Math.max(1, squared);\n        particle.vx += dx * factor;\n        particle.vy += dy * factor;\n      } else if (quad.children) {\n        for (const child of quad.children) this.repulse(particle, child, strength);\n      } else {\n        for (const other of (_a = quad.points) != null ? _a : []) {\n          if (other === particle) continue;\n          dx = particle.x - other.x;\n          dy = particle.y - other.y;\n          squared = dx * dx + dy * dy;\n          if (squared < 1e-12) {\n            const unit = direction(other.id, particle.id);\n            dx = unit.x;\n            dy = unit.y;\n            squared = 1;\n          }\n          const factor = strength / Math.max(1, squared);\n          particle.vx += dx * factor;\n          particle.vy += dy * factor;\n        }\n      }\n    }\n    /** Predicted-position uniform buckets avoid an all-pairs collision pass. */\n    collide() {\n      var _a, _b;\n      const distance = _ForceLayout.collisionDistance;\n      const buckets = /* @__PURE__ */ new Map();\n      const predicted = this.particles.map((node) => ({ x: node.x + node.vx, y: node.y + node.vy }));\n      for (const particle of this.particles) {\n        const point = predicted[particle.index];\n        const key = `${Math.floor(point.x / distance)},${Math.floor(point.y / distance)}`;\n        const bucket = (_a = buckets.get(key)) != null ? _a : [];\n        bucket.push(particle);\n        buckets.set(key, bucket);\n      }\n      for (const particle of this.particles) {\n        const point = predicted[particle.index], cellX = Math.floor(point.x / distance), cellY = Math.floor(point.y / distance);\n        for (let x = cellX - 1; x <= cellX + 1; x++) for (let y = cellY - 1; y <= cellY + 1; y++) {\n          for (const other of (_b = buckets.get(`${x},${y}`)) != null ? _b : []) {\n            if (other.index <= particle.index) continue;\n            const target = predicted[other.index];\n            let dx = target.x - point.x, dy = target.y - point.y;\n            let length = Math.hypot(dx, dy);\n            if (length >= distance) continue;\n            if (length < 1e-6) {\n              const unit = direction(particle.id, other.id);\n              dx = unit.x;\n              dy = unit.y;\n              length = 1;\n            }\n            const factor = (distance - length) / length * _ForceLayout.collisionStrength;\n            const aShare = particle.fixed ? 0 : other.fixed ? 1 : 0.5;\n            const bShare = other.fixed ? 0 : particle.fixed ? 1 : 0.5;\n            particle.vx -= dx * factor * aShare;\n            particle.vy -= dy * factor * aShare;\n            other.vx += dx * factor * bShare;\n            other.vy += dy * factor * bShare;\n          }\n        }\n      }\n    }\n  };\n  __publicField(_ForceLayout, "alphaDecay", 1 - Math.pow(1e-3, 1 / 300));\n  __publicField(_ForceLayout, "alphaMin", 1e-3);\n  __publicField(_ForceLayout, "damping", 0.6);\n  __publicField(_ForceLayout, "thetaSquared", 0.9 * 0.9);\n  __publicField(_ForceLayout, "collisionDistance", 120);\n  __publicField(_ForceLayout, "collisionStrength", 0.5);\n  var ForceLayout = _ForceLayout;\n  function buildTree(points) {\n    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;\n    for (const point of points) {\n      minX = Math.min(minX, point.x);\n      minY = Math.min(minY, point.y);\n      maxX = Math.max(maxX, point.x);\n      maxY = Math.max(maxY, point.y);\n    }\n    const width = Math.max(1, maxX - minX, maxY - minY) * 1.000001;\n    return splitQuad(points, minX, minY, width, 0);\n  }\n  function splitQuad(points, x, y, width, depth) {\n    let cx = 0, cy = 0;\n    for (const point of points) {\n      cx += point.x;\n      cy += point.y;\n    }\n    const quad = { x, y, width, count: points.length, cx: cx / points.length, cy: cy / points.length };\n    if (points.length <= 4 || depth >= 24 || width < 1e-6) {\n      quad.points = points;\n      return quad;\n    }\n    const half = width / 2, groups = [[], [], [], []];\n    for (const point of points) groups[(point.x >= x + half ? 1 : 0) + (point.y >= y + half ? 2 : 0)].push(point);\n    quad.children = groups.flatMap((group, index) => group.length ? [splitQuad(group, x + index % 2 * half, y + (index >= 2 ? half : 0), half, depth + 1)] : []);\n    return quad;\n  }\n  function finite(value, fallback) {\n    return Number.isFinite(value) ? value : fallback;\n  }\n  function clamp(value, min, max) {\n    return Math.max(min, Math.min(max, value));\n  }\n  function validPoint(point) {\n    return !!point && Number.isFinite(point.x) && Number.isFinite(point.y) && Math.abs(point.x) <= 1e7 && Math.abs(point.y) <= 1e7;\n  }\n  function hash(value) {\n    let result = 2166136261;\n    for (const char of value) {\n      result ^= char.charCodeAt(0);\n      result = Math.imul(result, 16777619);\n    }\n    return result >>> 0;\n  }\n  function seedPoint(id, index, count) {\n    const angle = hash(id) / 4294967296 * Math.PI * 2;\n    const radius = (120 + Math.sqrt(count) * 40) * Math.sqrt((index + 0.5) / Math.max(1, count));\n    return { x: Math.cos(angle) * radius, y: Math.sin(angle) * radius };\n  }\n  function direction(from, to) {\n    const first = from < to ? from : to, second = from < to ? to : from;\n    const angle = hash(first + "\\0" + second) / 4294967296 * Math.PI * 2;\n    const sign = from < to ? 1 : -1;\n    return { x: Math.cos(angle) * sign, y: Math.sin(angle) * sign };\n  }\n\n  // src/layout-worker.ts\n  var layout = new ForceLayout();\n  var nodes = [];\n  var revision = 0;\n  var commandVersion = 0;\n  var timer;\n  var scope = self;\n  function publish() {\n    const positions = new Float32Array(nodes.length * 2);\n    nodes.forEach((node, index) => {\n      positions[index * 2] = node.x;\n      positions[index * 2 + 1] = node.y;\n    });\n    scope.postMessage({ revision, commandVersion, positions, running: layout.isRunning }, [positions.buffer]);\n  }\n  function run() {\n    timer = void 0;\n    layout.tick(nodes);\n    publish();\n    if (layout.isRunning) timer = setTimeout(run, 1e3 / 60);\n  }\n  function start() {\n    if (timer === void 0) timer = setTimeout(run, 0);\n  }\n  scope.onmessage = (event) => {\n    const message = event.data;\n    commandVersion = message.commandVersion;\n    switch (message.type) {\n      case "sync":\n        revision = message.revision;\n        nodes = message.nodes;\n        layout.sync(nodes, message.edges, message.saved);\n        break;\n      case "configure":\n        layout.configure(message.options);\n        break;\n      case "selected":\n        layout.setSelected(message.path);\n        break;\n      case "pin":\n        layout.pin(message.path, message.point);\n        break;\n      case "move":\n        layout.movePinned(message.path, message.point);\n        break;\n      case "unpin":\n        layout.unpin(message.path);\n        break;\n      case "reheat":\n        layout.reheat(message.alpha);\n        break;\n      case "reset":\n        layout.reset();\n        break;\n    }\n    publish();\n    if (layout.isRunning) start();\n  };\n})();\n';
 
 // src/force-layout.ts
@@ -1573,7 +1781,8 @@ var BrainOSGraphView = class extends import_obsidian5.FileView {
     const revision = ++this.refreshRevision;
     const thoughtFiles = this.app.vault.getMarkdownFiles().filter((file) => {
       var _a2, _b;
-      return ((_b = (_a2 = this.app.metadataCache.getFileCache(file)) == null ? void 0 : _a2.frontmatter) == null ? void 0 : _b.brainos_type) === "thought-file";
+      const cache = this.app.metadataCache.getFileCache(file);
+      return ((_a2 = cache == null ? void 0 : cache.frontmatter) == null ? void 0 : _a2.brainos_type) === "thought-file" || !!((_b = cache == null ? void 0 : cache.listItems) == null ? void 0 : _b.length);
     });
     const thoughts = thoughtFiles.map((file) => {
       var _a2, _b, _c;
@@ -1652,7 +1861,7 @@ var BrainOSGraphView = class extends import_obsidian5.FileView {
       else this.plugin.startSession(this.thoughtPath || void 0);
     }));
     menu.addItem((item) => item.setTitle("\u64CD\u4F5C\u63D0\u793A").setIcon("circle-help").onClick(() => {
-      new import_obsidian5.Notice("\u53CC\u51FB\u7A7A\u767D\u65B0\u5EFA \xB7 Tab \u5EF6\u4F38 \xB7 Enter \u540C\u7EA7 \xB7 \u7A7A\u683C\u7F16\u8F91 \xB7 Alt \u62D6\u52A8\u8FDE\u7EBF \xB7 F \u9002\u914D\u56FE\u8C31", 1e4);
+      new import_obsidian5.Notice("\u53CC\u51FB\u7A7A\u767D\u65B0\u5EFA \xB7 Tab \u7EE7\u7EED \xB7 Enter \u540C\u8D77\u70B9\u5206\u652F \xB7 \u7A7A\u683C\u7F16\u8F91 \xB7 Alt \u62D6\u52A8\u8FDE\u7EBF \xB7 F \u9002\u914D\u56FE\u8C31", 1e4);
     }));
   }
   toggleControls() {
@@ -2065,7 +2274,7 @@ var BrainOSGraphView = class extends import_obsidian5.FileView {
     if (this.nodes.length) empty == null ? void 0 : empty.remove();
     const selected = this.nodes.find((node) => node.path === this.selected);
     this.positionDraftEditor();
-    this.status.setText(this.draftNode ? "\u8F93\u5165\u8282\u70B9\u6807\u9898 \xB7 Enter \u786E\u8BA4 \xB7 Tab \u786E\u8BA4\u5E76\u5EF6\u4F38 \xB7 Esc \u53D6\u6D88" : selected ? `${selected.label}${this.file && selected.ownerPath && selected.ownerPath !== this.file.path ? ` \xB7 \u5F15\u7528\u81EA ${(_e = selected.ownerPath.split("/").pop()) == null ? void 0 : _e.replace(/\.md$/, "")}` : ""} \xB7 Tab \u5EF6\u4F38 \xB7 Enter \u540C\u7EA7` : `${this.nodes.length} \u4E2A\u8282\u70B9 \xB7 ${this.edges.length} \u6761\u8FDE\u7EBF`);
+    this.status.setText(this.draftNode ? "\u8F93\u5165\u8282\u70B9\u6807\u9898 \xB7 Enter \u786E\u8BA4 \xB7 Tab \u786E\u8BA4\u5E76\u5EF6\u4F38 \xB7 Esc \u53D6\u6D88" : selected ? `${selected.label}${this.file && selected.ownerPath && selected.ownerPath !== this.file.path ? ` \xB7 \u5F15\u7528\u81EA ${(_e = selected.ownerPath.split("/").pop()) == null ? void 0 : _e.replace(/\.md$/, "")}` : ""} \xB7 Tab \u7EE7\u7EED \xB7 Enter \u540C\u8D77\u70B9\u5206\u652F` : `${this.nodes.length} \u4E2A\u8282\u70B9 \xB7 ${this.edges.length} \u6761\u8FDE\u7EBF`);
   }
   onPointerDown(event) {
     if (event.pointerType === "touch") this.touchPoints.set(event.pointerId, event);
@@ -2271,7 +2480,7 @@ var BrainOSGraphView = class extends import_obsidian5.FileView {
     if (node) new import_obsidian5.Notice("\u8282\u70B9\u5C5E\u4E8E\u591A\u4E2A\u601D\u8003\uFF0C\u8BF7\u5148\u5728\u56FE\u8C31\u8BBE\u7F6E\u4E2D\u9009\u62E9\u8981\u4FEE\u6539\u7684\u601D\u8003");
   }
   async createRelative(child) {
-    var _a, _b, _c;
+    var _a, _b, _c, _d;
     const node = this.nodes.find((item) => item.path === this.selected);
     if (!node) {
       await this.beginCreate(this.screenToWorld(this.canvas.clientWidth / 2, this.canvas.clientHeight / 2));
@@ -2286,10 +2495,16 @@ var BrainOSGraphView = class extends import_obsidian5.FileView {
       await this.beginCreate({ x: node.x, y: node.y }, void 0, thought);
       return;
     }
-    const parent = child ? node.path : (_c = this.edges.find((edge) => edge.to === node.path && (!thought || edge.thoughts.includes(thought)))) == null ? void 0 : _c.from;
-    await this.beginCreate({ x: node.x + (child ? 150 : 0), y: node.y + (child ? 0 : 100) }, parent, thought);
+    let parent = node.path;
+    if (!child) {
+      const visits = (_d = (_c = this.snapshot.steps) == null ? void 0 : _c.filter((step) => step.thoughtPath === thought)) != null ? _d : [];
+      let index = visits.length - 1;
+      while (index >= 0 && visits[index].key !== node.path) index--;
+      parent = index > 0 && visits[index - 1].pathIndex === visits[index].pathIndex ? visits[index - 1].key : void 0;
+    }
+    await this.beginCreate({ x: node.x + (child ? 150 : 0), y: node.y + (child ? 0 : 100) }, parent, thought, !child);
   }
-  async beginCreate(point, parent, target = this.editingThought()) {
+  async beginCreate(point, parent, target = this.editingThought(), newPath = false) {
     var _a, _b;
     if (this.busy) return;
     target = (_b = (_a = this.file) == null ? void 0 : _a.path) != null ? _b : target;
@@ -2308,7 +2523,7 @@ var BrainOSGraphView = class extends import_obsidian5.FileView {
     this.forceLayout.setSelected(draft.path);
     const form = this.contentEl.createEl("form", { cls: "brainos-node-title-editor" });
     this.editor = form;
-    const title = form.createEl("input", { cls: "brainos-node-title-input", placeholder: "\u8282\u70B9\u6807\u9898", attr: { "aria-label": "\u8282\u70B9\u6807\u9898", autocomplete: "off", required: "" } });
+    const title = form.createEl("input", { cls: "brainos-node-title-input", placeholder: "\u8F93\u5165\u540D\u79F0\uFF0C\u540C\u540D\u590D\u7528\u5DF2\u6709\u8282\u70B9", attr: { "aria-label": "\u8282\u70B9\u6807\u9898", autocomplete: "off", required: "" } });
     let continueAfterSave = false;
     title.addEventListener("compositionstart", () => {
       this.composing = true;
@@ -2343,9 +2558,10 @@ var BrainOSGraphView = class extends import_obsidian5.FileView {
         let committed = false;
         await this.runEdit(async () => {
           const parentNode = parent ? this.nodes.find((node) => node.path === parent) : void 0;
-          const key = await createThoughtNode(this.app, target, label, "", parentNode ? { key: parentNode.path, title: parentNode.label } : void 0);
-          this.plugin.layout.positions[key] = { x: draft.x, y: draft.y };
-          if (parent) this.plugin.recordSessionStep(parent, target);
+          const key = await createThoughtNode(this.app, target, label, "", parentNode ? { key: parentNode.path, title: parentNode.label, newPath } : void 0);
+          if (!this.snapshot.nodes.some((node) => node.path === key)) this.plugin.layout.positions[key] = { x: draft.x, y: draft.y };
+          const session = this.plugin.activeSession;
+          if (parent && (newPath || (session == null ? void 0 : session.stepKeys[session.stepKeys.length - 1]) !== parent)) this.plugin.recordSessionStep(parent, target);
           this.plugin.recordSessionStep(key, target);
           await this.plugin.saveLayout();
           this.closeEditor();
@@ -2381,7 +2597,7 @@ var BrainOSGraphView = class extends import_obsidian5.FileView {
     this.editor.style.left = `${this.canvas.offsetLeft + point.x}px`;
     this.editor.style.top = `${this.canvas.offsetTop + point.y + radius + 6}px`;
   }
-  async beginEdit(node) {
+  async beginEdit(node, ordinal) {
     var _a, _b;
     if (this.busy || node.placeholder) return;
     if (!node.nodeId) {
@@ -2389,15 +2605,29 @@ var BrainOSGraphView = class extends import_obsidian5.FileView {
       return;
     }
     await this.runEdit(async () => {
-      const original = await readThoughtNode(this.app, node.path);
+      const original = await readThoughtNode(this.app, node.path, ordinal);
       if (this.closed) return;
       this.closeEditor();
       const form = this.openEditor(node, "\u7F16\u8F91\u8282\u70B9");
       if (this.file && original.file.path !== this.file.path) form.createDiv({ cls: "brainos-node-editor-target", text: `\u5F15\u7528\u81EA ${original.file.basename}\uFF0C\u7F16\u8F91\u4F1A\u66F4\u65B0\u6765\u6E90\u8282\u70B9` });
       const title = form.createEl("input", { type: "text", attr: { "aria-label": "\u8282\u70B9\u6807\u9898" } });
       title.value = original.node.title;
+      const visits = form.createEl("select", { attr: { "aria-label": "\u9009\u62E9\u8282\u70B9\u7684\u7B2C\u51E0\u6B21\u8BB0\u5F55" } });
+      for (const visit of original.occurrences) {
+        visits.createEl("option", { value: String(visit.ordinal), text: "\u7B2C " + (visit.ordinal + 1) + " \u6B21\u8BB0\u5F55 \xB7 \u7B2C " + (visit.path + 1) + " \u6BB5\u601D\u8DEF" });
+      }
+      visits.value = String(original.node.ordinal);
+      form.createDiv({ cls: "brainos-node-editor-target", text: "\u540D\u79F0\u540C\u6B65\u4FEE\u6539\u672C\u6587\u4EF6\u4E2D\u7684\u6240\u6709\u51FA\u73B0\uFF1B\u6B63\u6587\u53EA\u4FEE\u6539\u6240\u9009\u7684\u8FD9\u6B21\u8BB0\u5F55\u3002" });
       const body = form.createEl("textarea", { cls: "brainos-node-editor-document", attr: { "aria-label": "\u8282\u70B9\u6B63\u6587 Markdown" } });
       body.value = original.node.body;
+      visits.onchange = () => {
+        if (body.value !== original.node.body || title.value !== original.node.title) {
+          visits.value = String(original.node.ordinal);
+          new import_obsidian5.Notice("\u8BF7\u5148\u4FDD\u5B58\u6216\u53D6\u6D88\u5F53\u524D\u4FEE\u6539\uFF0C\u518D\u5207\u6362\u8BB0\u5F55");
+          return;
+        }
+        void this.beginEdit(node, Number(visits.value));
+      };
       this.addMarkdownPreviewToggle(form, body, original.file.path);
       const controls = form.createDiv({ cls: "brainos-node-editor-actions" });
       const cancel = controls.createEl("button", { text: "\u53D6\u6D88", attr: { type: "button" } });
@@ -2408,7 +2638,18 @@ var BrainOSGraphView = class extends import_obsidian5.FileView {
         if (this.busy) return;
         save.disabled = true;
         void this.runEdit(async () => {
-          await editThoughtNode(this.app, node.path, title.value, body.value, original.node);
+          const key = await editThoughtNode(this.app, node.path, title.value, body.value, original.node);
+          if (key !== node.path) {
+            const point = this.plugin.layout.positions[node.path];
+            if (point) {
+              this.plugin.layout.positions[key] = point;
+              delete this.plugin.layout.positions[node.path];
+            }
+            for (const session of this.plugin.layout.sessions) session.stepKeys = session.stepKeys.map((step) => step === node.path ? key : step);
+            this.plugin.layout.graph.hiddenPaths = this.plugin.layout.graph.hiddenPaths.map((path) => path === node.path ? key : path);
+            this.selected = key;
+            await this.plugin.saveLayout();
+          }
           this.closeEditor();
           await this.refresh();
           this.plugin.refreshViews();
@@ -2532,7 +2773,8 @@ var BrainOSGraphView = class extends import_obsidian5.FileView {
     if (from.placeholder || to.placeholder) return;
     await this.runEdit(async () => {
       await linkThoughtNodes(this.app, thought, from, to);
-      this.plugin.recordSessionStep(from.path, thought);
+      const session = this.plugin.activeSession;
+      if ((session == null ? void 0 : session.stepKeys[session.stepKeys.length - 1]) !== from.path) this.plugin.recordSessionStep(from.path, thought);
       this.plugin.recordSessionStep(to.path, thought);
       await this.refresh();
       this.plugin.refreshViews();
@@ -2573,12 +2815,13 @@ var BrainOSGraphView = class extends import_obsidian5.FileView {
       menu.addItem((item) => item.setTitle("\u6253\u5F00\u6765\u6E90 Markdown").setIcon("file-text").onClick(() => void this.app.workspace.openLinkText(node.openPath, "", false)));
       menu.addItem((item) => item.setTitle("\u5F15\u7528\u5DF2\u6709\u8282\u70B9\u2026").setIcon("link").onClick(() => void this.openReferencePicker()));
       menu.addItem((item) => item.setTitle("\u5EF6\u4F38\u8282\u70B9\uFF08Tab\uFF09").setIcon("git-branch").onClick(() => void this.createRelative(true)));
+      menu.addItem((item) => item.setTitle("\u4ECE\u8FD9\u91CC\u53E6\u5F00\u4E00\u8DEF").setIcon("git-fork").onClick(() => void this.beginCreate({ x: node.x + 150, y: node.y + 100 }, node.path, this.editingThought(node), true)));
       menu.addItem((item) => {
         var _a;
         return item.setTitle(this.source === "vault" ? "\u4ECE\u56FE\u8C31\u9690\u85CF" : node.ownerPath === ((_a = this.file) == null ? void 0 : _a.path) ? "\u5220\u9664\u6B64\u8282\u70B9\u2026" : "\u4ECE\u5F53\u524D\u601D\u8003\u79FB\u9664\u5F15\u7528\u2026").setIcon("unlink").onClick(() => this.removeNode(node));
       });
     } else {
-      menu.addItem((item) => item.setTitle("\u5728\u8FD9\u91CC\u65B0\u5EFA\u8282\u70B9").setIcon("plus").onClick(() => void this.beginCreate(this.screenToWorld(x, y))));
+      menu.addItem((item) => item.setTitle("\u5728\u8FD9\u91CC\u65B0\u5EFA\u72EC\u7ACB\u60F3\u6CD5").setIcon("plus").onClick(() => void this.beginCreate(this.screenToWorld(x, y))));
       const byPath = new Map(this.nodes.map((item) => [item.path, item]));
       const edge = this.edges.find((item) => {
         const a = byPath.get(item.from), b = byPath.get(item.to);
@@ -2620,7 +2863,7 @@ var RemoveNodeModal = class extends import_obsidian5.Modal {
   }
   onOpen() {
     this.titleEl.setText(`\u79FB\u9664\u300C${this.label}\u300D\uFF1F`);
-    this.contentEl.createEl("p", { text: this.owned ? "\u5220\u9664\u672C\u601D\u8003\u4E2D\u7684\u8282\u70B9\u6B63\u6587\u53CA\u76F8\u90BB\u5173\u7CFB\u3002\u5176\u4ED6\u601D\u8003\u5BF9\u5B83\u7684\u5F15\u7528\u4F1A\u663E\u793A\u4E3A\u5931\u6548\uFF1B\u4E0D\u4F1A\u5220\u9664\u601D\u8003\u6587\u4EF6\u3002" : "\u4EC5\u79FB\u9664\u672C\u601D\u8003\u4E2D\u7684\u5F15\u7528\u53CA\u76F8\u90BB\u5173\u7CFB\uFF0C\u6765\u6E90\u8282\u70B9\u7684\u6807\u9898\u548C\u6B63\u6587\u4FDD\u6301\u4E0D\u53D8\u3002" });
+    this.contentEl.createEl("p", { text: this.owned ? "\u5220\u9664\u672C\u6587\u4EF6\u4E2D\u8FD9\u4E2A\u540D\u79F0\u7684\u5168\u90E8\u8BB0\u5F55\u53CA\u76F8\u90BB\u8FDE\u7EBF\u3002\u5176\u4ED6\u601D\u8003\u5BF9\u5B83\u7684\u5F15\u7528\u4F1A\u663E\u793A\u4E3A\u5931\u6548\uFF1B\u4E0D\u4F1A\u5220\u9664\u601D\u8003\u6587\u4EF6\u3002" : "\u4EC5\u79FB\u9664\u672C\u601D\u8003\u4E2D\u7684\u5F15\u7528\u53CA\u76F8\u90BB\u5173\u7CFB\uFF0C\u6765\u6E90\u8282\u70B9\u7684\u6807\u9898\u548C\u6B63\u6587\u4FDD\u6301\u4E0D\u53D8\u3002" });
     new import_obsidian5.Setting(this.contentEl).addButton((button) => button.setButtonText("\u53D6\u6D88").onClick(() => this.close())).addButton((button) => button.setButtonText(this.owned ? "\u5220\u9664\u8282\u70B9" : "\u79FB\u9664\u5F15\u7528").setWarning().onClick(() => {
       this.close();
       void this.remove();
@@ -2662,7 +2905,7 @@ var UnconfiguredAIProvider = class {
 };
 
 // src/main.ts
-var DATA_VERSION = 4;
+var DATA_VERSION = 5;
 var DEFAULT_SETTINGS = { noteFolder: DEFAULT_NOTE_FOLDER };
 var BrainOSPlugin = class extends import_obsidian6.Plugin {
   constructor() {
@@ -2883,14 +3126,14 @@ var BrainOSPlugin = class extends import_obsidian6.Plugin {
     session.endedAt = (/* @__PURE__ */ new Date()).toISOString();
     this.layout.activeSessionId = void 0;
     void this.saveLayout();
-    new import_obsidian6.Notice(`Session \u5DF2\u4FDD\u5B58\uFF1A${session.stepKeys.length} \u4E2A\u8282\u70B9`);
+    new import_obsidian6.Notice(`Session \u5DF2\u4FDD\u5B58\uFF1A${session.stepKeys.length} \u6B65`);
     this.refreshViews();
   }
   recordSessionStep(stepPath, thoughtPath) {
     const session = this.activeSession;
     if (!session) return;
     if (thoughtPath && !session.thoughtPath) session.thoughtPath = thoughtPath;
-    if (!session.stepKeys.includes(stepPath)) session.stepKeys.push(stepPath);
+    session.stepKeys.push(stepPath);
     void this.saveLayout();
   }
 };
@@ -2945,8 +3188,8 @@ var BrainOSSettingTab = class extends import_obsidian6.PluginSettingTab {
   display() {
     this.containerEl.empty();
     this.containerEl.createEl("h2", { text: "BrainOS Graph" });
-    new import_obsidian6.Setting(this.containerEl).setName("\u65B0\u5EFA\u7B14\u8BB0\u5B58\u653E\u4F4D\u7F6E").setDesc("\u521B\u5EFA\u65B0\u7B14\u8BB0\u65F6\u4F7F\u7528\u7684 vault \u5185\u6587\u4EF6\u5939\u8DEF\u5F84\uFF0C\u7559\u7A7A\u5219\u56DE\u9000\u5230 BrainOS/Thoughts\u3002").addText((text) => text.setPlaceholder(DEFAULT_SETTINGS.noteFolder).setValue(this.plugin.layout.settings.noteFolder).onChange(async (value) => {
-      this.plugin.layout.settings.noteFolder = value.trim() || DEFAULT_SETTINGS.noteFolder;
+    new import_obsidian6.Setting(this.containerEl).setName("\u65B0\u601D\u8003\u5B58\u653E\u4F4D\u7F6E").setDesc("\u76F4\u63A5\u4F7F\u7528\u8FD9\u4E2A\u7B14\u8BB0\u5E93\u5185\u8DEF\u5F84\uFF0C\u4E0D\u8FFD\u52A0\u5B50\u6587\u4EF6\u5939\uFF1B\u7559\u7A7A\u5B58\u5230\u7B14\u8BB0\u5E93\u6839\u76EE\u5F55\u3002").addText((text) => text.setPlaceholder("\u7559\u7A7A\u4F7F\u7528\u6839\u76EE\u5F55").setValue(this.plugin.layout.settings.noteFolder).onChange(async (value) => {
+      this.plugin.layout.settings.noteFolder = value.trim();
       await this.plugin.saveLayout();
     }));
     new import_obsidian6.Setting(this.containerEl).setName("\u91CD\u65B0\u751F\u6210\u5E03\u5C40").setDesc("\u5220\u9664\u4FDD\u5B58\u7684\u5750\u6807\uFF0C\u4E0B\u4E00\u6B21\u6253\u5F00\u56FE\u8C31\u65F6\u81EA\u52A8\u6392\u5217\u8282\u70B9\u3002").addButton((button) => button.setButtonText("\u91CD\u7F6E").onClick(async () => {

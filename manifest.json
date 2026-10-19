@@ -1,9 +1,9 @@
 {
   "id": "brainos-graph",
   "name": "BrainOS Graph",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "minAppVersion": "1.5.0",
-  "description": "在 Obsidian vault 中使用 BrainOS 的原子图谱与快速捕捉工作流。",
+  "description": "用普通 Markdown 列表记录思考路径，支持节点复用、独立想法和图谱编辑。",
   "author": "BrainOS",
   "isDesktopOnly": false,
   "fundingUrl": "",

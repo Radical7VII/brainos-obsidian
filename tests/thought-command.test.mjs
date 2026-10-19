@@ -38,15 +38,15 @@ test('new thought command creates an ordinary default MD and opens it directly i
   const command=f.plugin.commands.find(c=>c.id==='create-thought');assert.equal(command.name,'新建思考');
   // Exercise the same method called by the command, awaiting completion.
   await f.plugin.createNewThought();
-  const file=f.files.get('BrainOS/Thoughts/未命名思考.md');assert.ok(file instanceof TFile);
-  assert.match(file.text,/## 节点/);assert.doesNotMatch(file.text,/brainos-state/);
+  const file=f.files.get('未命名思考.md');assert.ok(file instanceof TFile);
+  assert.equal(file.text,'');
   assert.deepEqual(f.states,[{type:'brainos-graph-view',state:{file:file.path},active:true}]);assert.equal(f.tabs,1);
   const original=file.text,dialogs=Modal.opened;
   await f.plugin.createNewThought();
   assert.equal(f.files.get(file.path).text,original);assert.equal(f.tabs,1);
   assert.equal(Modal.opened,dialogs+1);assert.equal([...f.files.keys()].filter(p=>p.endsWith('.md')).length,1);
   await f.plugin.createNewThought('第二个方向');
-  assert.ok(f.files.has('BrainOS/Thoughts/第二个方向.md'));
+  assert.ok(f.files.has('第二个方向.md'));
 });
 test('rapid new thought commands create just one file and one tab',async()=>{
   const f=fixture();await Promise.all([f.plugin.createNewThought(),f.plugin.createNewThought()]);
@@ -60,4 +60,17 @@ test('Markdown header integration adds one mind-view icon per tab and removes st
   f.plugin.syncHeaderActions();f.plugin.syncHeaderActions();assert.equal(actionCount,1);
   const action=f.plugin.headerActions.get(view);assert.equal(action.title,'切换到思维视图');
   leaves=[];f.plugin.syncHeaderActions();assert.equal(action.isConnected,false);assert.equal(f.plugin.headerActions.size,0);
+});
+
+
+test('configured destination is used directly and existing saved destinations remain intact',async()=>{
+  const f=fixture();f.plugin.loadData=async()=>({settings:{noteFolder:'项目/思考'}});
+  await f.plugin.onload();await f.plugin.createNewThought('设计');
+  assert.ok(f.files.has('项目/思考/设计.md'));
+  assert.ok(!f.files.has('项目/思考/BrainOS'));assert.ok(!f.files.has('项目/思考/Thoughts'));
+});
+test('Session retains revisits instead of deduplicating the thought route',()=>{
+  const f=fixture();f.plugin.startSession('思考.md');
+  for(const key of ['A','B','A','A','C'])f.plugin.recordSessionStep(key,'思考.md');
+  assert.deepEqual(f.plugin.activeSession.stepKeys,['A','B','A','A','C']);
 });

@@ -7,7 +7,7 @@ import { GraphOptions, defaultGraphOptions, loadGraphOptions } from "./graph-opt
 import { BrainOSAIProvider, UnconfiguredAIProvider } from "./ai";
 import { MindViewMode } from "./mind-view-mode";
 
-const DATA_VERSION = 4;
+const DATA_VERSION = 5;
 type BrainOSSettings = { noteFolder: string };
 export type Viewport = { x: number; y: number; zoom: number };
 export type SessionRecord = {
@@ -249,7 +249,7 @@ export default class BrainOSPlugin extends Plugin {
     session.endedAt = new Date().toISOString();
     this.layout.activeSessionId = undefined;
     void this.saveLayout();
-    new Notice(`Session 已保存：${session.stepKeys.length} 个节点`);
+    new Notice(`Session 已保存：${session.stepKeys.length} 步`);
     this.refreshViews();
   }
 
@@ -257,7 +257,7 @@ export default class BrainOSPlugin extends Plugin {
     const session = this.activeSession;
     if (!session) return;
     if (thoughtPath && !session.thoughtPath) session.thoughtPath = thoughtPath;
-    if (!session.stepKeys.includes(stepPath)) session.stepKeys.push(stepPath);
+    session.stepKeys.push(stepPath);
     void this.saveLayout();
   }
 
@@ -305,4 +305,19 @@ class ThoughtNameModal extends Modal {
   onClose() { this.contentEl.empty(); }
 }
 
-class BrainOSSettingTab extends PluginSettingTab { constructor(app: App, private plugin: BrainOSPlugin) { super(app, plugin); } display() { this.containerEl.empty(); this.containerEl.createEl("h2", { text: "BrainOS Graph" }); new Setting(this.containerEl).setName("新建笔记存放位置").setDesc("创建新笔记时使用的 vault 内文件夹路径，留空则回退到 BrainOS/Thoughts。").addText((text) => text.setPlaceholder(DEFAULT_SETTINGS.noteFolder).setValue(this.plugin.layout.settings.noteFolder).onChange(async (value) => { this.plugin.layout.settings.noteFolder = value.trim() || DEFAULT_SETTINGS.noteFolder; await this.plugin.saveLayout(); })); new Setting(this.containerEl).setName("重新生成布局").setDesc("删除保存的坐标，下一次打开图谱时自动排列节点。").addButton((button) => button.setButtonText("重置").onClick(async () => { this.plugin.layout.positions = {}; await this.plugin.saveLayout(); this.plugin.refreshViews(); new Notice("图谱布局已重置"); })); } }
+class BrainOSSettingTab extends PluginSettingTab {
+  constructor(app: App, private plugin: BrainOSPlugin) { super(app, plugin); }
+  display() {
+    this.containerEl.empty();
+    this.containerEl.createEl("h2", { text: "BrainOS Graph" });
+    new Setting(this.containerEl).setName("新思考存放位置")
+      .setDesc("直接使用这个笔记库内路径，不追加子文件夹；留空存到笔记库根目录。")
+      .addText(text => text.setPlaceholder("留空使用根目录").setValue(this.plugin.layout.settings.noteFolder)
+        .onChange(async value => { this.plugin.layout.settings.noteFolder = value.trim(); await this.plugin.saveLayout(); }));
+    new Setting(this.containerEl).setName("重新生成布局")
+      .setDesc("删除保存的坐标，下一次打开图谱时自动排列节点。")
+      .addButton(button => button.setButtonText("重置").onClick(async () => {
+        this.plugin.layout.positions = {}; await this.plugin.saveLayout(); this.plugin.refreshViews(); new Notice("图谱布局已重置");
+      }));
+  }
+}

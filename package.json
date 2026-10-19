@@ -1,8 +1,8 @@
 {
   "name": "brainos-obsidian",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
-  "description": "BrainOS graph and atom workflow for Obsidian",
+  "description": "BrainOS Markdown thought paths and graph workflow for Obsidian",
   "scripts": {
     "build": "npm run typecheck && node esbuild.mjs",
     "typecheck": "tsc --noEmit",
