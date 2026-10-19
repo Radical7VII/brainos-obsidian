@@ -3307,9 +3307,9 @@ var BrainOSGraphView = class extends import_obsidian6.FileView {
         return item.setTitle(this.source === "vault" ? "\u4ECE\u56FE\u8C31\u9690\u85CF" : node.ownerPath === ((_a = this.file) == null ? void 0 : _a.path) ? "\u5220\u9664\u6B64\u8282\u70B9\u2026" : "\u4ECE\u5F53\u524D\u601D\u8003\u79FB\u9664\u5F15\u7528\u2026").setIcon("unlink").onClick(() => this.removeNode(node));
       });
     } else {
-      menu.addItem((item) => item.setTitle("\u5728\u8FD9\u91CC\u65B0\u5EFA\u72EC\u7ACB\u60F3\u6CD5").setIcon("plus").onClick(() => void this.beginCreate(this.screenToWorld(x, y))));
       const edge = this.edgeAt(x, y);
-      if (edge) menu.addItem((item) => item.setTitle("\u65AD\u5F00\u6B64\u8FDE\u7EBF").setIcon("unlink").onClick(() => void this.disconnectEdge(edge)));
+      if (!edge) return;
+      menu.addItem((item) => item.setTitle("\u65AD\u5F00\u6B64\u8FDE\u7EBF").setIcon("unlink").onClick(() => void this.disconnectEdge(edge)));
     }
     menu.showAtMouseEvent(event);
   }

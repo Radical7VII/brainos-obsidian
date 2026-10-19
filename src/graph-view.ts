@@ -1183,9 +1183,9 @@ export class BrainOSGraphView extends FileView {
       menu.addItem(item => item.setTitle("从这里另开一路").setIcon("git-fork").onClick(() => void this.beginCreate({ x: node.x + 150, y: node.y + 100 }, node.path, this.editingThought(node), true)));
       menu.addItem(item => item.setTitle(this.source === "vault" ? "从图谱隐藏" : node.ownerPath === this.file?.path ? "删除此节点…" : "从当前思考移除引用…").setIcon("unlink").onClick(() => this.removeNode(node)));
     } else {
-      menu.addItem(item => item.setTitle("在这里新建独立想法").setIcon("plus").onClick(() => void this.beginCreate(this.screenToWorld(x, y))));
       const edge = this.edgeAt(x, y);
-      if (edge) menu.addItem(item => item.setTitle("断开此连线").setIcon("unlink").onClick(() => void this.disconnectEdge(edge)));
+      if (!edge) return;
+      menu.addItem(item => item.setTitle("断开此连线").setIcon("unlink").onClick(() => void this.disconnectEdge(edge)));
     }
     menu.showAtMouseEvent(event);
   }
