@@ -1,13 +1,14 @@
-import { Component, FileView, MarkdownRenderer, MarkdownView, Menu, Modal, Notice, Setting, SuggestModal, TFile, WorkspaceLeaf, setIcon } from "obsidian";
+import { FileView, MarkdownView, Menu, Modal, Notice, Setting, SuggestModal, TFile, WorkspaceLeaf, setIcon } from "obsidian";
 import type BrainOSPlugin from "./main";
 import { GraphEdge, GraphNode, GraphSnapshot, Point, buildSnapshot } from "./thoughts";
 import { GraphLayout } from "./graph-layout";
 import { defaultGraphOptions, graphForces } from "./graph-options";
 import { buildVaultSnapshot, selectGraph } from "./vault-graph";
 import { removeVaultLink } from "./vault-links";
-import { createThoughtNode, editThoughtNode, linkThoughtNodes, readThoughtNode, referenceThoughtNode, removeThoughtNode, unlinkThoughtNodes } from "./thought-store";
+import { InsertThoughtTarget, insertThoughtNode, createThoughtNode, editThoughtNode, linkThoughtNodes, readThoughtNode, referenceThoughtNode, removeThoughtNode, unlinkThoughtNodes } from "./thought-store";
 import { splitNodeKey } from "./thought-document";
 import { approachOpacity, edgeInViewport, edgeStrokeKey, graphLabelAlpha, intersectsViewport, nodeScreenRadius, wrapGraphLabel } from "./graph-rendering";
+import { NodeTitleCandidate, NodeTitleSuggest } from "./node-title-suggest";
 import { titleKeyAction } from "./node-title-input";
 
 export { VIEW_TYPE } from "./mind-view-mode";
@@ -41,7 +42,8 @@ export class BrainOSGraphView extends FileView {
   private hovered?: string;
   private gesture?: Gesture;
   private editor?: HTMLElement;
-  private editorComponent?: Component;
+  private editingNode?: GraphNode;
+  private titleSuggest?: NodeTitleSuggest;
   private busy = false;
   private refreshRevision = 0;
   private closed = false;
@@ -67,6 +69,7 @@ export class BrainOSGraphView extends FileView {
   private readonly rendererOpacity = new Map<string, number>();
   private draftNode?: GraphNode;
   private draftParent?: string;
+  private draftChild?: string;
   private composing = false;
   private touchPoints = new Map<number, TouchPoint>();
   private searchBox?: HTMLElement;
@@ -202,6 +205,10 @@ export class BrainOSGraphView extends FileView {
     this.nodes = this.draftNode ? result.nodes.filter(node => !node.placeholder) : result.nodes; this.edges = result.edges;
     if (this.draftNode) {
       this.nodes.push(this.draftNode);
+      if (this.draftChild) {
+        this.edges = this.edges.filter(edge => edge.from !== this.draftParent || edge.to !== this.draftChild);
+        this.edges.push({ from: this.draftNode.path, to: this.draftChild, thoughts: [] });
+      }
       if (this.draftParent && this.nodes.some(node => node.path === this.draftParent)) this.edges.push({ from: this.draftParent, to: this.draftNode.path, thoughts: [] });
     }
     if (this.selected && !this.nodes.some(node => node.path === this.selected)) this.selected = undefined;
@@ -243,7 +250,7 @@ export class BrainOSGraphView extends FileView {
       else this.plugin.startSession(this.thoughtPath || undefined);
     }));
     menu.addItem(item => item.setTitle("操作提示").setIcon("circle-help").onClick(() => {
-      new Notice("双击空白新建 · Tab 继续 · Enter 同起点分支 · 空格编辑标题 · Alt 拖动连线 · F 适配图谱", 10000);
+      new Notice("双击空白新建 · Tab 继续 · Enter 同起点分支 · 空格编辑标题 · ⌘/Ctrl Enter 插入父节点 · Alt 拖动连线 · F 适配图谱", 10000);
     }));
   }
 
@@ -539,7 +546,7 @@ export class BrainOSGraphView extends FileView {
           ctx.beginPath(); ctx.arc(point.x, point.y, radius + 2, 0, Math.PI * 2); ctx.stroke();
         }
       }
-      if (node.path === this.draftNode?.path) continue;
+      if (node.path === this.draftNode?.path || node.path === this.editingNode?.path) continue;
       const alphaText = isFocus ? 1 : labelAlpha * alpha;
       if (alphaText <= 0.001) continue;
       const baseSize = nodeScreenRadius(node.weight ?? node.degree, 1, options.nodeSizeMultiplier);
@@ -716,13 +723,18 @@ export class BrainOSGraphView extends FileView {
     if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "f" && !this.editor) {
       event.preventDefault(); this.toggleSearch(true); return;
     }
+    if (!event.isComposing && !event.altKey && !event.shiftKey && (event.metaKey || event.ctrlKey)
+      && event.key === "Enter" && !this.editor && !this.busy) {
+      if (this.selected) { event.preventDefault(); event.stopPropagation(); if (!event.repeat) void this.insertParent(); }
+      return;
+    }
     if (event.isComposing || event.metaKey || event.ctrlKey || event.altKey || this.editor || this.busy) return;
     if (event.key.toLowerCase() === "f") { event.preventDefault(); this.fitToView(); return; }
     const node = this.nodes.find(item => item.path === this.selected);
     if (event.key === "Tab" || event.key === "Enter") { event.preventDefault(); void this.createRelative(event.key === "Tab"); }
     else if (event.key === " " && node) {
       event.preventDefault();
-      if (!event.repeat) void this.beginEdit(node, undefined, true);
+      if (!event.repeat) void this.beginEdit(node);
     }
     else if ((event.key === "Delete" || event.key === "Backspace") && node) { event.preventDefault(); this.removeNode(node); }
     else if (event.key === "Escape") { this.selected = undefined; this.forceLayout.setSelected(undefined); this.draw(); }
@@ -753,13 +765,29 @@ export class BrainOSGraphView extends FileView {
     await this.beginCreate({ x: node.x + (child ? 150 : 0), y: node.y + (child ? 0 : 100) }, parent, thought, !child);
   }
 
-  private async beginCreate(point: Point, parent?: string, target = this.editingThought(), newPath = false) {
+  private async insertParent() {
+    const node = this.nodes.find(item => item.path === this.selected);
+    if (!node || node.placeholder) return;
+    const thought = this.file?.path ?? this.editingThought(node);
+    if (this.source === "vault" || !thought) { new Notice("请先打开一个思考文件"); return; }
+    const visits = this.snapshot.steps?.filter(step => step.thoughtPath === thought) ?? [];
+    let index = visits.length - 1;
+    while (index >= 0 && visits[index].key !== node.path) index--;
+    const child = visits[index], parent = visits[index - 1];
+    if (!child || !parent || child.pathIndex !== parent.pathIndex) { new Notice("当前节点没有父节点，无法在中间插入"); return; }
+    const parentNode = this.nodes.find(item => item.path === parent.key);
+    const point = parentNode ? { x: (node.x + parentNode.x) / 2, y: (node.y + parentNode.y) / 2 }
+      : { x: node.x - 150, y: node.y };
+    await this.beginCreate(point, parent.key, thought, false, { child: node.path, parent: parent.key, ordinal: child.ordinal });
+  }
+
+  private async beginCreate(point: Point, parent?: string, target = this.editingThought(), newPath = false, insertion?: InsertThoughtTarget) {
     if (this.busy) return;
     target = this.file?.path ?? target;
     if (this.source === "vault" || !target) { new Notice("请先打开一个思考文件，或运行「新建思考」命令"); return; }
     this.closeEditor();
     const draft: GraphNode = { path: `draft:${crypto.randomUUID()}`, label: "", openPath: "", degree: parent ? 1 : 0, thoughts: target ? [target] : [], kind: "note", ...point };
-    this.draftNode = draft; this.draftParent = parent;
+    this.draftNode = draft; this.draftParent = parent; this.draftChild = insertion?.child;
     this.filterSnapshot();
     this.selected = draft.path;
     this.forceLayout.sync(this.nodes, this.edges, this.plugin.layout.positions);
@@ -767,13 +795,26 @@ export class BrainOSGraphView extends FileView {
     this.forceLayout.setSelected(draft.path);
     const form = this.contentEl.createEl("form", { cls: "brainos-node-title-editor" }); this.editor = form;
     const title = form.createEl("input", { cls: "brainos-node-title-input", placeholder: "输入名称，同名复用已有节点", attr: { "aria-label": "节点标题", autocomplete: "off", required: "" } });
+    if (insertion) title.placeholder = "输入要插入的新节点名称";
+    let chosen: NodeTitleCandidate | undefined;
+    this.titleSuggest = new NodeTitleSuggest(this.app, title, target!, async () => {
+      const snapshot = await buildSnapshot(this.app).catch(() => this.snapshot);
+      return [...snapshot.nodes, ...this.snapshot.nodes];
+    }, candidate => {
+      if (this.editor !== form || this.busy) return;
+      chosen = candidate; form.requestSubmit();
+    }, () => this.composing, !!insertion);
     let continueAfterSave = false;
     title.addEventListener("compositionstart", () => { this.composing = true; });
     title.addEventListener("compositionend", () => { this.composing = false; });
     title.oninput = () => {
+      chosen = undefined;
       title.style.width = `${Math.max(110, Math.min(420, Array.from(title.value).length * 15 + 28))}px`;
     };
     form.onkeydown = event => {
+      if (event.defaultPrevented) return;
+      // Let the native popover handle its navigation and selection keys.
+      if (this.titleSuggest?.isShowing && ["ArrowUp", "ArrowDown", "Enter", "Escape"].includes(event.key)) return;
       event.stopPropagation();
       const action = titleKeyAction(event);
       if (action === "none") return;
@@ -793,7 +834,10 @@ export class BrainOSGraphView extends FileView {
         let committed = false;
         await this.runEdit(async () => {
           const parentNode = parent ? this.nodes.find(node => node.path === parent) : undefined;
-          const key = await createThoughtNode(this.app, target!, label, "", parentNode ? { key: parentNode.path, title: parentNode.label, newPath } : undefined);
+          const reference = chosen?.kind === "reference" ? chosen.node : undefined;
+          const key = reference ? (await referenceThoughtNode(this.app, target!, reference, parentNode, newPath), reference.path)
+            : insertion ? await insertThoughtNode(this.app, target!, label, insertion)
+            : await createThoughtNode(this.app, target!, label, "", parentNode ? { key: parentNode.path, title: parentNode.label, newPath } : undefined);
           // Reusing a name keeps the original node's position.
           if (!this.snapshot.nodes.some(node => node.path === key)) this.plugin.layout.positions[key] = { x: draft.x, y: draft.y };
           const session = this.plugin.activeSession;
@@ -819,45 +863,46 @@ export class BrainOSGraphView extends FileView {
   }
 
   private positionDraftEditor() {
-    if (!this.draftNode || !this.editor) return;
-    const point = this.worldToScreen(this.draftNode);
-    const radius = nodeScreenRadius(this.draftNode.degree, this.zoom, this.graphOptions.nodeSizeMultiplier);
+    const anchor = this.draftNode ?? this.nodes.find(node => node.path === this.editingNode?.path);
+    if (!anchor || !this.editor) return;
+    const point = this.worldToScreen(anchor);
+    const radius = nodeScreenRadius(anchor.degree, this.zoom, this.graphOptions.nodeSizeMultiplier);
     this.editor.style.left = `${this.canvas.offsetLeft + point.x}px`;
-    this.editor.style.top = `${this.canvas.offsetTop + point.y + radius + 6}px`;
+    this.editor.style.top = `${this.canvas.offsetTop + point.y + radius + 6 + (this.editingNode ? 15 : 0)}px`;
   }
 
-  private async beginEdit(node: GraphNode, ordinal?: number, focusTitle = false) {
+  private async beginEdit(node: GraphNode) {
     if (this.busy || node.placeholder) return;
     if (!node.nodeId) { if (node.openPath) await this.app.workspace.openLinkText(node.openPath, this.file?.path ?? "", false); return; }
     await this.runEdit(async () => {
-      const original = await readThoughtNode(this.app, node.path, ordinal);
+      const original = await readThoughtNode(this.app, node.path);
       if (this.closed) return;
       this.closeEditor();
-      const form = this.openEditor(node, "编辑节点");
-      if (this.file && original.file.path !== this.file.path) form.createDiv({ cls: "brainos-node-editor-target", text: `引用自 ${original.file.basename}，编辑会更新来源节点` });
-      const title = form.createEl("input", { type: "text", attr: { "aria-label": "节点标题" } }); title.value = original.node.title;
-      const visits = form.createEl("select", { attr: { "aria-label": "选择节点的第几次记录" } });
-      for (const visit of original.occurrences) {
-        visits.createEl("option", { value: String(visit.ordinal), text: "第 " + (visit.ordinal + 1) + " 次记录 · 第 " + (visit.path + 1) + " 段思路" });
-      }
-      visits.value = String(original.node.ordinal);
-      form.createDiv({ cls: "brainos-node-editor-target", text: "名称同步修改本文件中的所有出现；正文只修改所选的这次记录。" });
-      const body = form.createEl("textarea", { cls: "brainos-node-editor-document", attr: { "aria-label": "节点正文 Markdown" } }); body.value = original.node.body;
-      visits.onchange = () => {
-        if (body.value !== original.node.body || title.value !== original.node.title) {
-          visits.value = String(original.node.ordinal);
-          new Notice("请先保存或取消当前修改，再切换记录"); return;
-        }
-        void this.beginEdit(node, Number(visits.value));
+      this.editingNode = node; this.selected = node.path; this.hovered = node.path;
+      this.forceLayout.setSelected(node.path);
+      const form = this.contentEl.createEl("form", { cls: "brainos-node-title-editor" }); this.editor = form;
+      const title = form.createEl("input", { cls: "brainos-node-title-input", attr: { "aria-label": "节点标题", autocomplete: "off" } });
+      title.value = original.node.title;
+      const resizeTitle = () => { title.style.width = `${Math.max(110, Math.min(420, Array.from(title.value).length * 15 + 28))}px`; };
+      title.oninput = resizeTitle; resizeTitle();
+      title.addEventListener("compositionstart", () => { this.composing = true; });
+      title.addEventListener("compositionend", () => { this.composing = false; });
+      form.onkeydown = event => {
+        event.stopPropagation();
+        const action = titleKeyAction(event);
+        if (action === "none" || this.busy) return;
+        event.preventDefault();
+        if (action === "cancel") { this.closeEditor(); this.draw(); return; }
+        if (!this.composing && title.value.trim()) form.requestSubmit();
       };
-      this.addMarkdownPreviewToggle(form, body, original.file.path);
-      const controls = form.createDiv({ cls: "brainos-node-editor-actions" });
-      const cancel = controls.createEl("button", { text: "取消", attr: { type: "button" } }); cancel.onclick = () => this.closeEditor();
-      const save = controls.createEl("button", { text: "保存", cls: "mod-cta", attr: { type: "submit" } });
       form.onsubmit = event => {
-        event.preventDefault(); if (this.busy) return; save.disabled = true;
+        event.preventDefault();
+        if (this.busy || this.composing || !title.value.trim()) return;
+        if (title.value.trim() === original.node.title) { this.closeEditor(); this.draw(); return; }
+        title.disabled = true;
         void this.runEdit(async () => {
-          const key = await editThoughtNode(this.app, node.path, title.value, body.value, original.node);
+          // A title edit preserves every occurrence's original Markdown body verbatim.
+          const key = await editThoughtNode(this.app, node.path, title.value, undefined, original.node);
           if (key !== node.path) {
             const point = this.plugin.layout.positions[node.path];
             if (point) { this.plugin.layout.positions[key] = point; delete this.plugin.layout.positions[node.path]; }
@@ -866,10 +911,17 @@ export class BrainOSGraphView extends FileView {
             this.selected = key; await this.plugin.saveLayout();
           }
           this.closeEditor(); await this.refresh(); this.plugin.refreshViews();
-        }).finally(() => { save.disabled = false; });
+        }).finally(() => {
+          title.disabled = false;
+          if (this.editor === form) title.focus();
+        });
       };
-      if (focusTitle) { title.focus(); title.select(); }
-      else body.focus();
+      title.onblur = () => requestAnimationFrame(() => {
+        if (this.editor !== form || this.busy || this.composing) return;
+        if (title.value.trim()) form.requestSubmit();
+        else { this.closeEditor(); this.draw(); }
+      });
+      this.positionDraftEditor(); this.startLayoutAnimation(); this.draw(); title.focus(); title.select();
     });
   }
 
@@ -891,29 +943,14 @@ export class BrainOSGraphView extends FileView {
     });
   }
 
-  private openEditor(point: Point, heading: string): HTMLFormElement {
-    const form = this.contentEl.createEl("form", { cls: "brainos-node-editor" }); this.editor = form;
-    form.createEl("strong", { text: heading });
-    const screen = Number.isFinite(point.x) && Number.isFinite(point.y) ? this.worldToScreen(point)
-      : { x: this.contentEl.clientWidth / 2, y: this.contentEl.clientHeight / 2 };
-    const width = Math.min(320, this.contentEl.clientWidth - 16);
-    form.style.left = `${Math.max(8, Math.min(this.contentEl.clientWidth - width - 8, screen.x - width / 2))}px`;
-    form.style.top = `${Math.max(8, Math.min(this.contentEl.clientHeight - 440, screen.y + 30))}px`;
-    form.onkeydown = event => {
-      event.stopPropagation();
-      if (event.key === "Escape" && !this.busy) { event.preventDefault(); this.closeEditor(); }
-      if ((event.metaKey || event.ctrlKey) && event.key === "Enter") { event.preventDefault(); form.requestSubmit(); }
-    };
-    return form;
-  }
-
   private closeEditor() {
-    this.editorComponent?.unload(); this.editorComponent = undefined;
+    this.titleSuggest?.dispose(); this.titleSuggest = undefined;
+    this.editingNode = undefined;
     this.editor?.remove(); this.editor = undefined;
     if (this.draftNode) {
       const path = this.draftNode.path;
       this.forceLayout.unpin(path);
-      this.draftNode = undefined; this.draftParent = undefined;
+      this.draftNode = undefined; this.draftParent = undefined; this.draftChild = undefined;
       this.nodes = this.nodes.filter(node => node.path !== path);
       this.edges = this.edges.filter(edge => edge.from !== path && edge.to !== path);
       if (this.selected === path) this.selected = undefined;
@@ -921,34 +958,6 @@ export class BrainOSGraphView extends FileView {
     }
     this.composing = false;
     if (!this.closed) this.canvas?.focus();
-  }
-
-  /** Add an in-place Markdown edit/preview switch without leaving graph context. */
-  private addMarkdownPreviewToggle(form: HTMLFormElement, body: HTMLTextAreaElement, sourcePath: string) {
-    const preview = form.createDiv({ cls: "brainos-node-editor-preview" });
-    preview.style.display = "none";
-    const controls = form.createDiv({ cls: "brainos-node-editor-actions" });
-    const toggle = controls.createEl("button", { text: "预览", attr: { type: "button" } });
-    toggle.onclick = async () => {
-      const showing = preview.style.display !== "none";
-      if (showing) {
-        preview.style.display = "none";
-        body.style.display = "";
-        toggle.setText("预览");
-        this.editorComponent?.unload();
-        this.editorComponent = undefined;
-        return;
-      }
-      preview.empty();
-      const component = new Component();
-      component.load();
-      this.editorComponent?.unload();
-      this.editorComponent = component;
-      await MarkdownRenderer.render(this.app, body.value, preview, sourcePath, component);
-      body.style.display = "none";
-      preview.style.display = "block";
-      toggle.setText("编辑");
-    };
   }
 
   private async runEdit(action: () => Promise<void>) {

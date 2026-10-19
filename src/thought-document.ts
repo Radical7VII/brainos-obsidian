@@ -167,8 +167,24 @@ export function appendDocumentContinuation(markdown: string, from: string | unde
   }
   return appendDocumentStep(text, to, body);
 }
+/** Insert a fresh node while keeping all existing visits and bodies intact. */
+export function insertDocumentStepBefore(markdown: string, index: number, title: string) {
+  const doc = parseThoughtDocument(markdown), visit = doc.occurrences[index], previous = doc.occurrences[index - 1];
+  if (!visit || !previous || previous.path !== visit.path) throw new Error("当前节点没有父节点，无法在中间插入");
+  const value = cleanNodeTitle(title), parsed = parseThoughtDocument(renderOccurrence(value));
+  if (parsed.nodes.length !== 1 || parsed.nodes[0].target) throw new Error("请输入普通节点名称");
+  if (doc.nodes.some(node => node.id === titleID(value))) throw new Error("已有同名节点，请为插入的新节点使用其他名称");
+  const next = markdown.slice(0, visit.start) + renderOccurrence(value) + markdown.slice(visit.start);
+  const result = parseThoughtDocument(next), inserted = result.occurrences[index];
+  const retained = result.occurrences.filter((_, ordinal) => ordinal !== index);
+  const signature = (visits: DocumentOccurrence[]) => JSON.stringify(visits.map(item => [item.id, item.body, item.path]));
+  if (result.occurrences.length !== doc.occurrences.length + 1 || inserted?.id !== titleID(value)
+    || signature(retained) !== signature(doc.occurrences)) throw new Error("当前路径无法安全插入节点，请先检查 Markdown 中的代码块或注释");
+  return next;
+}
+
 /** Rename all occurrences; edit only the selected visit's body. */
-export function updateDocumentNode(markdown: string, id: string, title: string, body: string, expected?: NodeEditSnapshot) {
+export function updateDocumentNode(markdown: string, id: string, title: string, body: string | undefined, expected?: NodeEditSnapshot) {
   const doc = parseThoughtDocument(markdown), node = doc.nodes.find(node => node.id === id);
   if (!node) throw new Error("节点已不存在，请刷新后重试");
   const value = cleanNodeTitle(title);
@@ -182,7 +198,7 @@ export function updateDocumentNode(markdown: string, id: string, title: string, 
   }
   let text = markdown;
   for (const visit of [...node.occurrences].reverse()) {
-    const rendered = visit === occurrence ? renderOccurrence(value, body) + "\n"
+    const rendered = visit === occurrence && body !== undefined ? renderOccurrence(value, body) + "\n"
       : "- " + value + markdown.slice(visit.start + 2 + visit.title.length, visit.end);
     text = text.slice(0, visit.start) + rendered + text.slice(visit.end);
   }

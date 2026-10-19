@@ -265,3 +265,16 @@ test('legacy region introductions and empty-region prose survive conversion',asy
   await createThoughtNode(f.app,empty.path,'第一个想法');
   assert.match(f.content.get(empty.path),/尚未开始的草稿。/);
 });
+
+test('inserting before a cross-file reference edits only the current thought path',async()=>{
+  const f=fixture();f.add('来源.md','- 原节点\n  来源正文\n');
+  f.add('当前.md','- 起点\n  起点正文\n- [[来源.md|原节点]]\n  引用正文\n');
+  await api.insertThoughtNode(f.app,'当前.md','中间',{child:nodeKey('来源.md',titleID('原节点')),parent:nodeKey('当前.md',titleID('起点')),ordinal:0});
+  assert.equal(f.content.get('当前.md'),'- 起点\n  起点正文\n- 中间\n- [[来源.md|原节点]]\n  引用正文\n');
+  assert.equal(f.content.get('来源.md'),'- 原节点\n  来源正文\n');
+});
+test('document insertion cannot cross path boundaries or add a file-reference title',()=>{
+  const original='- A\n\n---\n\n- B\n';
+  assert.throws(()=>api.insertDocumentStepBefore(original,1,'新节点'),/没有父节点/);
+  assert.throws(()=>api.insertDocumentStepBefore('- A\n- B\n',1,'[[外部.md]]'),/普通节点名称/);
+});

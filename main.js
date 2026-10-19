@@ -25,10 +25,10 @@ __export(main_exports, {
   default: () => BrainOSPlugin
 });
 module.exports = __toCommonJS(main_exports);
-var import_obsidian6 = require("obsidian");
+var import_obsidian7 = require("obsidian");
 
 // src/graph-view.ts
-var import_obsidian5 = require("obsidian");
+var import_obsidian6 = require("obsidian");
 
 // src/thoughts.ts
 var import_obsidian2 = require("obsidian");
@@ -205,6 +205,19 @@ function appendDocumentContinuation(markdown, from, to, body = "") {
   }
   return appendDocumentStep(text, to, body);
 }
+function insertDocumentStepBefore(markdown, index, title) {
+  const doc = parseThoughtDocument(markdown), visit = doc.occurrences[index], previous = doc.occurrences[index - 1];
+  if (!visit || !previous || previous.path !== visit.path) throw new Error("\u5F53\u524D\u8282\u70B9\u6CA1\u6709\u7236\u8282\u70B9\uFF0C\u65E0\u6CD5\u5728\u4E2D\u95F4\u63D2\u5165");
+  const value = cleanNodeTitle(title), parsed = parseThoughtDocument(renderOccurrence(value));
+  if (parsed.nodes.length !== 1 || parsed.nodes[0].target) throw new Error("\u8BF7\u8F93\u5165\u666E\u901A\u8282\u70B9\u540D\u79F0");
+  if (doc.nodes.some((node) => node.id === titleID(value))) throw new Error("\u5DF2\u6709\u540C\u540D\u8282\u70B9\uFF0C\u8BF7\u4E3A\u63D2\u5165\u7684\u65B0\u8282\u70B9\u4F7F\u7528\u5176\u4ED6\u540D\u79F0");
+  const next = markdown.slice(0, visit.start) + renderOccurrence(value) + markdown.slice(visit.start);
+  const result = parseThoughtDocument(next), inserted = result.occurrences[index];
+  const retained = result.occurrences.filter((_, ordinal) => ordinal !== index);
+  const signature = (visits) => JSON.stringify(visits.map((item) => [item.id, item.body, item.path]));
+  if (result.occurrences.length !== doc.occurrences.length + 1 || (inserted == null ? void 0 : inserted.id) !== titleID(value) || signature(retained) !== signature(doc.occurrences)) throw new Error("\u5F53\u524D\u8DEF\u5F84\u65E0\u6CD5\u5B89\u5168\u63D2\u5165\u8282\u70B9\uFF0C\u8BF7\u5148\u68C0\u67E5 Markdown \u4E2D\u7684\u4EE3\u7801\u5757\u6216\u6CE8\u91CA");
+  return next;
+}
 function updateDocumentNode(markdown, id, title, body, expected) {
   var _a;
   const doc = parseThoughtDocument(markdown), node = doc.nodes.find((node2) => node2.id === id);
@@ -219,7 +232,7 @@ function updateDocumentNode(markdown, id, title, body, expected) {
   }
   let text = markdown;
   for (const visit of [...node.occurrences].reverse()) {
-    const rendered = visit === occurrence ? renderOccurrence(value, body) + "\n" : "- " + value + markdown.slice(visit.start + 2 + visit.title.length, visit.end);
+    const rendered = visit === occurrence && body !== void 0 ? renderOccurrence(value, body) + "\n" : "- " + value + markdown.slice(visit.start + 2 + visit.title.length, visit.end);
     text = text.slice(0, visit.start) + rendered + text.slice(visit.end);
   }
   const expectedIDs = doc.occurrences.map((visit) => visit.id === id ? titleID(value) : visit.id);
@@ -566,6 +579,20 @@ async function createThoughtNode(app, owner, title, body = "", parent) {
   });
   return nodeKey(owner, titleID(value));
 }
+async function insertThoughtNode(app, owner, title, target) {
+  const keys = await referenceKeys(app, owner);
+  await mutateThought(app, owner, (markdown) => {
+    const visits = parseThoughtDocument(markdown).occurrences;
+    const matches = visits.flatMap((visit, index2) => keys.entry(visit.id) === target.child && visit.ordinal === target.ordinal ? [index2] : []);
+    if (matches.length !== 1) throw new Error("\u5F53\u524D\u8282\u70B9\u7684\u8BB0\u5F55\u5DF2\u53D8\u5316\uFF0C\u8BF7\u5237\u65B0\u540E\u91CD\u8BD5");
+    const index = matches[0], previous = visits[index - 1];
+    if (!previous || previous.path !== visits[index].path || keys.entry(previous.id) !== target.parent) {
+      throw new Error("\u7236\u8282\u70B9\u6216\u8DEF\u5F84\u5DF2\u53D8\u5316\uFF0C\u8BF7\u5237\u65B0\u540E\u91CD\u8BD5");
+    }
+    return insertDocumentStepBefore(markdown, index, title);
+  });
+  return nodeKey(owner, titleID(cleanNodeTitle(title)));
+}
 async function editThoughtNode(app, key, title, body, expected) {
   const ref = splitNodeKey(key);
   if (!ref) throw new Error("\u8BF7\u9009\u62E9\u601D\u8003\u6587\u4EF6\u4E2D\u7684\u8282\u70B9");
@@ -606,14 +633,14 @@ async function renameIncomingReferences(app, source, oldTitle, title) {
 async function linkThoughtNodes(app, owner, from, to) {
   await mutateThought(app, owner, (text) => appendDocumentContinuation(text, graphEntry(owner, from, text), graphEntry(owner, to, text)));
 }
-async function referenceThoughtNode(app, owner, node, parent) {
+async function referenceThoughtNode(app, owner, node, parent, newPath = false) {
   if (!node.nodeId || !node.ownerPath) throw new Error("\u8BF7\u9009\u62E9\u601D\u8003\u6587\u4EF6\u4E2D\u7684\u8282\u70B9");
   await readThoughtNode(app, node.path);
-  await mutateThought(app, owner, (text) => appendDocumentContinuation(
-    text,
-    parent ? graphEntry(owner, parent, text) : void 0,
-    graphEntry(owner, node, text)
-  ));
+  await mutateThought(app, owner, (text) => {
+    const from = parent ? graphEntry(owner, parent, text) : void 0, to = graphEntry(owner, node, text);
+    if (from && newPath) return appendDocumentStep(appendDocumentStep(text, from, "", true), to);
+    return appendDocumentContinuation(text, from, to);
+  });
 }
 async function referenceKeys(app, owner) {
   const doc = (await loadThoughtDocument(app, requireFile(app, owner))).doc;
@@ -1543,6 +1570,70 @@ function wrapGraphLabel(text, measure, width, maxLines = 4) {
   return lines;
 }
 
+// src/node-title-suggest.ts
+var import_obsidian5 = require("obsidian");
+var NodeTitleSuggest = class extends import_obsidian5.AbstractInputSuggest {
+  constructor(app, input, owner, loadNodes, choose, isComposing, insertion = false) {
+    super(app, input);
+    this.owner = owner;
+    this.loadNodes = loadNodes;
+    this.choose = choose;
+    this.isComposing = isComposing;
+    this.insertion = insertion;
+    __publicField(this, "disposed", false);
+    __publicField(this, "showing", false);
+    __publicField(this, "candidates");
+    this.limit = 50;
+  }
+  get isShowing() {
+    return this.showing;
+  }
+  open() {
+    if (!this.disposed) {
+      this.showing = true;
+      super.open();
+    }
+  }
+  close() {
+    this.showing = false;
+    super.close();
+  }
+  async getSuggestions(query) {
+    var _a;
+    if (this.disposed || this.isComposing()) return [];
+    const title = query.trim();
+    if (!title) return [];
+    (_a = this.candidates) != null ? _a : this.candidates = this.loadNodes().catch(() => {
+      this.candidates = void 0;
+      return [];
+    });
+    const nodes = await this.candidates;
+    if (this.disposed || this.isComposing()) return [];
+    const unique = [...new Map(nodes.filter((node) => node.nodeId && node.ownerPath && !node.placeholder).map((node) => [node.path, node])).values()];
+    const search = (0, import_obsidian5.prepareFuzzySearch)(title);
+    const matches = unique.map((node) => ({ node, match: search(`${node.label} ${node.ownerPath}`) })).filter((item) => item.match).sort((a, b) => Number(b.node.ownerPath === this.owner) - Number(a.node.ownerPath === this.owner) || b.match.score - a.match.score).slice(0, 49);
+    const options = this.insertion ? [] : matches.map(({ node }) => ({ kind: node.ownerPath === this.owner ? "reuse" : "reference", node }));
+    if (!unique.some((node) => node.ownerPath === this.owner && node.label === title)) options.push({ kind: "create", title });
+    return options;
+  }
+  renderSuggestion(candidate, el) {
+    el.addClass("mod-complex");
+    const content = el.createDiv({ cls: "suggestion-content" });
+    content.createDiv({ cls: "suggestion-title", text: candidate.kind === "create" ? candidate.title : candidate.node.label });
+    content.createDiv({ cls: "suggestion-note", text: candidate.kind === "create" ? "\u65B0\u5EFA\u8282\u70B9" : candidate.kind === "reuse" ? "\u590D\u7528\u5F53\u524D\u601D\u8003\u4E2D\u7684\u8282\u70B9" : `\u5F15\u7528\u81EA ${candidate.node.ownerPath}` });
+  }
+  selectSuggestion(candidate, event) {
+    if (this.disposed || this.isComposing() || event.isComposing) return;
+    this.setValue(candidate.kind === "create" ? candidate.title : candidate.node.label);
+    this.close();
+    this.choose(candidate);
+  }
+  dispose() {
+    this.disposed = true;
+    this.close();
+  }
+};
+
 // src/node-title-input.ts
 function titleKeyAction(event) {
   if (event.isComposing || event.keyCode === 229 || event.ctrlKey || event.metaKey || event.altKey) return "none";
@@ -1589,7 +1680,7 @@ var MindViewMode = class {
 // src/graph-view.ts
 var MIN_ZOOM = 0.05;
 var MAX_ZOOM = 8;
-var BrainOSGraphView = class extends import_obsidian5.FileView {
+var BrainOSGraphView = class extends import_obsidian6.FileView {
   constructor(leaf, plugin) {
     super(leaf);
     this.plugin = plugin;
@@ -1606,7 +1697,8 @@ var BrainOSGraphView = class extends import_obsidian5.FileView {
     __publicField(this, "hovered");
     __publicField(this, "gesture");
     __publicField(this, "editor");
-    __publicField(this, "editorComponent");
+    __publicField(this, "editingNode");
+    __publicField(this, "titleSuggest");
     __publicField(this, "busy", false);
     __publicField(this, "refreshRevision", 0);
     __publicField(this, "closed", false);
@@ -1632,6 +1724,7 @@ var BrainOSGraphView = class extends import_obsidian5.FileView {
     __publicField(this, "rendererOpacity", /* @__PURE__ */ new Map());
     __publicField(this, "draftNode");
     __publicField(this, "draftParent");
+    __publicField(this, "draftChild");
     __publicField(this, "composing", false);
     __publicField(this, "touchPoints", /* @__PURE__ */ new Map());
     __publicField(this, "searchBox");
@@ -1686,16 +1779,16 @@ var BrainOSGraphView = class extends import_obsidian5.FileView {
     this.contentEl.addClass("brainos-graph-view");
     const edit = this.addAction("pencil", "\u5207\u6362\u5230\u7F16\u8F91\u89C6\u56FE", () => {
       if (this.file) void this.plugin.openMarkdownView(this.leaf, this.file);
-      else new import_obsidian5.Notice("\u5148\u6253\u5F00\u4E00\u7BC7\u7B14\u8BB0\uFF0C\u6216\u901A\u8FC7\u547D\u4EE4\u300CBrainOS Graph\uFF1A\u65B0\u5EFA\u601D\u8003\u300D\u5F00\u59CB");
+      else new import_obsidian6.Notice("\u5148\u6253\u5F00\u4E00\u7BC7\u7B14\u8BB0\uFF0C\u6216\u901A\u8FC7\u547D\u4EE4\u300CBrainOS Graph\uFF1A\u65B0\u5EFA\u601D\u8003\u300D\u5F00\u59CB");
     });
     edit.addClass("brainos-edit-view-action");
     (_a = edit.parentElement) == null ? void 0 : _a.prepend(edit);
     const tools = this.contentEl.createDiv({ cls: "brainos-graph-tools" });
     this.searchButton = tools.createEl("button", { cls: "clickable-icon", attr: { "aria-label": "\u641C\u7D22\u8282\u70B9", "aria-expanded": "false", title: "\u641C\u7D22\u8282\u70B9\uFF08\u2318/Ctrl F\uFF09" } });
-    (0, import_obsidian5.setIcon)(this.searchButton, "search");
+    (0, import_obsidian6.setIcon)(this.searchButton, "search");
     this.searchButton.onclick = () => this.toggleSearch();
     this.controlsButton = tools.createEl("button", { cls: "clickable-icon", attr: { "aria-label": "\u56FE\u8C31\u8BBE\u7F6E", "aria-expanded": "false", title: "\u56FE\u8C31\u8BBE\u7F6E" } });
-    (0, import_obsidian5.setIcon)(this.controlsButton, "sliders-horizontal");
+    (0, import_obsidian6.setIcon)(this.controlsButton, "sliders-horizontal");
     this.controlsButton.onclick = () => this.toggleControls();
     this.searchBox = this.contentEl.createDiv({ cls: "brainos-graph-search" });
     this.searchBox.hidden = true;
@@ -1800,6 +1893,10 @@ var BrainOSGraphView = class extends import_obsidian5.FileView {
     this.edges = result.edges;
     if (this.draftNode) {
       this.nodes.push(this.draftNode);
+      if (this.draftChild) {
+        this.edges = this.edges.filter((edge) => edge.from !== this.draftParent || edge.to !== this.draftChild);
+        this.edges.push({ from: this.draftNode.path, to: this.draftChild, thoughts: [] });
+      }
       if (this.draftParent && this.nodes.some((node) => node.path === this.draftParent)) this.edges.push({ from: this.draftParent, to: this.draftNode.path, thoughts: [] });
     }
     if (this.selected && !this.nodes.some((node) => node.path === this.selected)) this.selected = void 0;
@@ -1837,7 +1934,7 @@ var BrainOSGraphView = class extends import_obsidian5.FileView {
       var _a;
       const path = (_a = this.selected) != null ? _a : this.plugin.lastMarkdownPath;
       if (!this.localCenter && !this.snapshot.nodes.some((node) => node.path === path)) {
-        new import_obsidian5.Notice("\u8BF7\u5148\u9009\u4E2D\u4E00\u4E2A\u8282\u70B9");
+        new import_obsidian6.Notice("\u8BF7\u5148\u9009\u4E2D\u4E00\u4E2A\u8282\u70B9");
         return;
       }
       this.localCenter = this.localCenter ? void 0 : path;
@@ -1852,7 +1949,7 @@ var BrainOSGraphView = class extends import_obsidian5.FileView {
       else this.plugin.startSession(this.thoughtPath || void 0);
     }));
     menu.addItem((item) => item.setTitle("\u64CD\u4F5C\u63D0\u793A").setIcon("circle-help").onClick(() => {
-      new import_obsidian5.Notice("\u53CC\u51FB\u7A7A\u767D\u65B0\u5EFA \xB7 Tab \u7EE7\u7EED \xB7 Enter \u540C\u8D77\u70B9\u5206\u652F \xB7 \u7A7A\u683C\u7F16\u8F91\u6807\u9898 \xB7 Alt \u62D6\u52A8\u8FDE\u7EBF \xB7 F \u9002\u914D\u56FE\u8C31", 1e4);
+      new import_obsidian6.Notice("\u53CC\u51FB\u7A7A\u767D\u65B0\u5EFA \xB7 Tab \u7EE7\u7EED \xB7 Enter \u540C\u8D77\u70B9\u5206\u652F \xB7 \u7A7A\u683C\u7F16\u8F91\u6807\u9898 \xB7 \u2318/Ctrl Enter \u63D2\u5165\u7236\u8282\u70B9 \xB7 Alt \u62D6\u52A8\u8FDE\u7EBF \xB7 F \u9002\u914D\u56FE\u8C31", 1e4);
     }));
   }
   toggleControls() {
@@ -1869,11 +1966,11 @@ var BrainOSGraphView = class extends import_obsidian5.FileView {
     const heading = panel.createDiv({ cls: "brainos-controls-heading" });
     heading.createEl("strong", { text: "\u56FE\u8C31\u8BBE\u7F6E" });
     const close = heading.createEl("button", { cls: "clickable-icon", attr: { "aria-label": "\u5173\u95ED\u56FE\u8C31\u8BBE\u7F6E" } });
-    (0, import_obsidian5.setIcon)(close, "x");
+    (0, import_obsidian6.setIcon)(close, "x");
     close.onclick = () => this.toggleControls();
     const settings = this.plugin.layout.graph;
     if (!this.file) {
-      new import_obsidian5.Setting(panel).setName("\u56FE\u8C31\u6765\u6E90").addDropdown((control) => control.addOptions({ vault: "\u7B14\u8BB0\u53CC\u94FE", thoughts: "\u601D\u7EF4\u8282\u70B9" }).setValue(this.source).onChange((value) => {
+      new import_obsidian6.Setting(panel).setName("\u56FE\u8C31\u6765\u6E90").addDropdown((control) => control.addOptions({ vault: "\u7B14\u8BB0\u53CC\u94FE", thoughts: "\u601D\u7EF4\u8282\u70B9" }).setValue(this.source).onChange((value) => {
         settings.source = value;
         this.thoughtPath = "";
         this.localCenter = void 0;
@@ -1884,7 +1981,7 @@ var BrainOSGraphView = class extends import_obsidian5.FileView {
       if (this.source === "thoughts") {
         const options = { "": "\u5168\u90E8\u601D\u8003" };
         for (const thought of this.snapshot.thoughts) options[thought.path] = thought.title;
-        new import_obsidian5.Setting(panel).setName("\u5F53\u524D\u601D\u8003").addDropdown((control) => control.addOptions(options).setValue(this.thoughtPath).onChange((value) => {
+        new import_obsidian6.Setting(panel).setName("\u5F53\u524D\u601D\u8003").addDropdown((control) => control.addOptions(options).setValue(this.thoughtPath).onChange((value) => {
           this.persistViewport();
           this.closeEditor();
           this.thoughtPath = value;
@@ -1899,7 +1996,7 @@ var BrainOSGraphView = class extends import_obsidian5.FileView {
       void this.plugin.saveLayout();
     };
     const slider = (name, value, min, max, step, change) => {
-      new import_obsidian5.Setting(panel).setName(name).addSlider((control) => control.setLimits(min, max, step).setValue(value).setDynamicTooltip().onChange((value2) => {
+      new import_obsidian6.Setting(panel).setName(name).addSlider((control) => control.setLimits(min, max, step).setValue(value).setDynamicTooltip().onChange((value2) => {
         change(value2);
         save();
         this.draw();
@@ -1909,7 +2006,7 @@ var BrainOSGraphView = class extends import_obsidian5.FileView {
     slider("\u8282\u70B9\u5927\u5C0F", settings.display.nodeSizeMultiplier, 0.25, 3, 0.05, (value) => settings.display.nodeSizeMultiplier = value);
     slider("\u8FDE\u7EBF\u7C97\u7EC6", settings.display.lineSizeMultiplier, 0.1, 5, 0.1, (value) => settings.display.lineSizeMultiplier = value);
     slider("\u6587\u5B57\u6DE1\u51FA\u9608\u503C", settings.display.textFadeMultiplier, -3, 3, 0.1, (value) => settings.display.textFadeMultiplier = value);
-    new import_obsidian5.Setting(panel).setName("\u663E\u793A\u7BAD\u5934").addToggle((control) => control.setValue(settings.display.showArrows).onChange((value) => {
+    new import_obsidian6.Setting(panel).setName("\u663E\u793A\u7BAD\u5934").addToggle((control) => control.setValue(settings.display.showArrows).onChange((value) => {
       settings.display.showArrows = value;
       save();
       this.draw();
@@ -1925,13 +2022,13 @@ var BrainOSGraphView = class extends import_obsidian5.FileView {
     slider("\u8FDE\u63A5\u529B", settings.forces.link, 0, 1, 0.01, (value) => forces("link", value));
     slider("\u8FDE\u63A5\u957F\u5EA6", settings.forces.distance, 30, 500, 1, (value) => forces("distance", value));
     panel.createEl("h3", { text: "\u7B5B\u9009" });
-    new import_obsidian5.Setting(panel).setName("\u6062\u590D\u9690\u85CF\u7684\u8282\u70B9").addButton((button) => button.setButtonText("\u6062\u590D").onClick(() => {
+    new import_obsidian6.Setting(panel).setName("\u6062\u590D\u9690\u85CF\u7684\u8282\u70B9").addButton((button) => button.setButtonText("\u6062\u590D").onClick(() => {
       settings.hiddenPaths = [];
       save();
       this.filterSnapshot();
       this.draw();
     }));
-    const toggle = (name, key) => new import_obsidian5.Setting(panel).setName(name).addToggle((control) => control.setValue(settings.filter[key]).onChange((value) => {
+    const toggle = (name, key) => new import_obsidian6.Setting(panel).setName(name).addToggle((control) => control.setValue(settings.filter[key]).onChange((value) => {
       settings.filter[key] = value;
       save();
       void this.refresh();
@@ -1946,7 +2043,7 @@ var BrainOSGraphView = class extends import_obsidian5.FileView {
     });
     toggle("\u5C40\u90E8\u56FE\u8C31\u5165\u94FE", "localIncoming");
     toggle("\u5C40\u90E8\u56FE\u8C31\u51FA\u94FE", "localOutgoing");
-    new import_obsidian5.Setting(panel).setName("\u6062\u590D\u9ED8\u8BA4\u56FE\u8C31").addButton((button) => button.setButtonText("\u91CD\u7F6E").onClick(() => {
+    new import_obsidian6.Setting(panel).setName("\u6062\u590D\u9ED8\u8BA4\u56FE\u8C31").addButton((button) => button.setButtonText("\u91CD\u7F6E").onClick(() => {
       var _a2, _b2;
       const currentSource = settings.source;
       this.plugin.layout.graph = defaultGraphOptions();
@@ -2039,14 +2136,14 @@ var BrainOSGraphView = class extends import_obsidian5.FileView {
   }
   focusCurrent() {
     var _a, _b, _c, _d, _e;
-    const file = (_d = (_b = this.file) != null ? _b : (_a = this.app.workspace.getActiveViewOfType(import_obsidian5.MarkdownView)) == null ? void 0 : _a.file) != null ? _d : this.app.vault.getAbstractFileByPath((_c = this.plugin.lastMarkdownPath) != null ? _c : "");
-    if (!(file instanceof import_obsidian5.TFile)) {
-      new import_obsidian5.Notice("\u5F53\u524D\u6CA1\u6709\u6253\u5F00\u7684 Markdown \u7B14\u8BB0");
+    const file = (_d = (_b = this.file) != null ? _b : (_a = this.app.workspace.getActiveViewOfType(import_obsidian6.MarkdownView)) == null ? void 0 : _a.file) != null ? _d : this.app.vault.getAbstractFileByPath((_c = this.plugin.lastMarkdownPath) != null ? _c : "");
+    if (!(file instanceof import_obsidian6.TFile)) {
+      new import_obsidian6.Notice("\u5F53\u524D\u6CA1\u6709\u6253\u5F00\u7684 Markdown \u7B14\u8BB0");
       return;
     }
     const node = (_e = this.nodes.find((item) => item.ownerPath === file.path)) != null ? _e : this.nodes.find((item) => item.openPath === file.path);
     if (!node) {
-      new import_obsidian5.Notice("\u5F53\u524D\u6587\u4EF6\u672A\u51FA\u73B0\u5728\u6240\u9009\u601D\u8003\u56FE\u8C31\u4E2D");
+      new import_obsidian6.Notice("\u5F53\u524D\u6587\u4EF6\u672A\u51FA\u73B0\u5728\u6240\u9009\u601D\u8003\u56FE\u8C31\u4E2D");
       return;
     }
     this.selected = node.path;
@@ -2088,7 +2185,7 @@ var BrainOSGraphView = class extends import_obsidian5.FileView {
     return closest;
   }
   draw() {
-    var _a, _b, _c, _d, _e;
+    var _a, _b, _c, _d, _e, _f;
     if (!this.canvas || this.closed) return;
     const ctx = this.canvas.getContext("2d");
     if (!ctx) return;
@@ -2231,10 +2328,10 @@ var BrainOSGraphView = class extends import_obsidian5.FileView {
           ctx.stroke();
         }
       }
-      if (node.path === ((_c = this.draftNode) == null ? void 0 : _c.path)) continue;
+      if (node.path === ((_c = this.draftNode) == null ? void 0 : _c.path) || node.path === ((_d = this.editingNode) == null ? void 0 : _d.path)) continue;
       const alphaText = isFocus ? 1 : labelAlpha * alpha;
       if (alphaText <= 1e-3) continue;
-      const baseSize = nodeScreenRadius((_d = node.weight) != null ? _d : node.degree, 1, options.nodeSizeMultiplier);
+      const baseSize = nodeScreenRadius((_e = node.weight) != null ? _e : node.degree, 1, options.nodeSizeMultiplier);
       const labelScale = isFocus && zoom < 1 ? 1 : visualScale;
       const fontSize = (14 + baseSize / 4) * labelScale;
       const textTop = point.y + radius + 5 * labelScale + (isFocus ? 15 : 0);
@@ -2265,7 +2362,7 @@ var BrainOSGraphView = class extends import_obsidian5.FileView {
     if (this.nodes.length) empty == null ? void 0 : empty.remove();
     const selected = this.nodes.find((node) => node.path === this.selected);
     this.positionDraftEditor();
-    this.status.setText(this.draftNode ? "\u8F93\u5165\u8282\u70B9\u6807\u9898 \xB7 Enter \u786E\u8BA4 \xB7 Tab \u786E\u8BA4\u5E76\u5EF6\u4F38 \xB7 Esc \u53D6\u6D88" : selected ? `${selected.label}${this.file && selected.ownerPath && selected.ownerPath !== this.file.path ? ` \xB7 \u5F15\u7528\u81EA ${(_e = selected.ownerPath.split("/").pop()) == null ? void 0 : _e.replace(/\.md$/, "")}` : ""} \xB7 Tab \u7EE7\u7EED \xB7 Enter \u540C\u8D77\u70B9\u5206\u652F \xB7 \u7A7A\u683C\u7F16\u8F91\u6807\u9898` : `${this.nodes.length} \u4E2A\u8282\u70B9 \xB7 ${this.edges.length} \u6761\u8FDE\u7EBF`);
+    this.status.setText(this.draftNode ? "\u8F93\u5165\u8282\u70B9\u6807\u9898 \xB7 Enter \u786E\u8BA4 \xB7 Tab \u786E\u8BA4\u5E76\u5EF6\u4F38 \xB7 Esc \u53D6\u6D88" : selected ? `${selected.label}${this.file && selected.ownerPath && selected.ownerPath !== this.file.path ? ` \xB7 \u5F15\u7528\u81EA ${(_f = selected.ownerPath.split("/").pop()) == null ? void 0 : _f.replace(/\.md$/, "")}` : ""} \xB7 Tab \u7EE7\u7EED \xB7 Enter \u540C\u8D77\u70B9\u5206\u652F \xB7 \u7A7A\u683C\u7F16\u8F91\u6807\u9898` : `${this.nodes.length} \u4E2A\u8282\u70B9 \xB7 ${this.edges.length} \u6761\u8FDE\u7EBF`);
   }
   onPointerDown(event) {
     if (event.pointerType === "touch") this.touchPoints.set(event.pointerId, event);
@@ -2442,6 +2539,14 @@ var BrainOSGraphView = class extends import_obsidian5.FileView {
       this.toggleSearch(true);
       return;
     }
+    if (!event.isComposing && !event.altKey && !event.shiftKey && (event.metaKey || event.ctrlKey) && event.key === "Enter" && !this.editor && !this.busy) {
+      if (this.selected) {
+        event.preventDefault();
+        event.stopPropagation();
+        if (!event.repeat) void this.insertParent();
+      }
+      return;
+    }
     if (event.isComposing || event.metaKey || event.ctrlKey || event.altKey || this.editor || this.busy) return;
     if (event.key.toLowerCase() === "f") {
       event.preventDefault();
@@ -2454,7 +2559,7 @@ var BrainOSGraphView = class extends import_obsidian5.FileView {
       void this.createRelative(event.key === "Tab");
     } else if (event.key === " " && node) {
       event.preventDefault();
-      if (!event.repeat) void this.beginEdit(node, void 0, true);
+      if (!event.repeat) void this.beginEdit(node);
     } else if ((event.key === "Delete" || event.key === "Backspace") && node) {
       event.preventDefault();
       this.removeNode(node);
@@ -2468,7 +2573,7 @@ var BrainOSGraphView = class extends import_obsidian5.FileView {
     if (this.thoughtPath) return this.thoughtPath;
     if ((node == null ? void 0 : node.thoughts.length) === 1) return node.thoughts[0];
     if (this.snapshot.thoughts.length === 1) return this.snapshot.thoughts[0].path;
-    if (node) new import_obsidian5.Notice("\u8282\u70B9\u5C5E\u4E8E\u591A\u4E2A\u601D\u8003\uFF0C\u8BF7\u5148\u5728\u56FE\u8C31\u8BBE\u7F6E\u4E2D\u9009\u62E9\u8981\u4FEE\u6539\u7684\u601D\u8003");
+    if (node) new import_obsidian6.Notice("\u8282\u70B9\u5C5E\u4E8E\u591A\u4E2A\u601D\u8003\uFF0C\u8BF7\u5148\u5728\u56FE\u8C31\u8BBE\u7F6E\u4E2D\u9009\u62E9\u8981\u4FEE\u6539\u7684\u601D\u8003");
   }
   async createRelative(child) {
     var _a, _b, _c, _d;
@@ -2479,7 +2584,7 @@ var BrainOSGraphView = class extends import_obsidian5.FileView {
     }
     const thought = (_b = (_a = this.file) == null ? void 0 : _a.path) != null ? _b : this.editingThought(node);
     if (this.source === "vault" || !thought) {
-      new import_obsidian5.Notice("\u8BF7\u5148\u6253\u5F00\u4E00\u4E2A\u601D\u8003\u6587\u4EF6\uFF0C\u8282\u70B9\u4F1A\u4FDD\u5B58\u5728\u8FD9\u4EFD\u6587\u4EF6\u4E2D");
+      new import_obsidian6.Notice("\u8BF7\u5148\u6253\u5F00\u4E00\u4E2A\u601D\u8003\u6587\u4EF6\uFF0C\u8282\u70B9\u4F1A\u4FDD\u5B58\u5728\u8FD9\u4EFD\u6587\u4EF6\u4E2D");
       return;
     }
     if (node.placeholder) {
@@ -2495,18 +2600,40 @@ var BrainOSGraphView = class extends import_obsidian5.FileView {
     }
     await this.beginCreate({ x: node.x + (child ? 150 : 0), y: node.y + (child ? 0 : 100) }, parent, thought, !child);
   }
-  async beginCreate(point, parent, target = this.editingThought(), newPath = false) {
+  async insertParent() {
+    var _a, _b, _c, _d;
+    const node = this.nodes.find((item) => item.path === this.selected);
+    if (!node || node.placeholder) return;
+    const thought = (_b = (_a = this.file) == null ? void 0 : _a.path) != null ? _b : this.editingThought(node);
+    if (this.source === "vault" || !thought) {
+      new import_obsidian6.Notice("\u8BF7\u5148\u6253\u5F00\u4E00\u4E2A\u601D\u8003\u6587\u4EF6");
+      return;
+    }
+    const visits = (_d = (_c = this.snapshot.steps) == null ? void 0 : _c.filter((step) => step.thoughtPath === thought)) != null ? _d : [];
+    let index = visits.length - 1;
+    while (index >= 0 && visits[index].key !== node.path) index--;
+    const child = visits[index], parent = visits[index - 1];
+    if (!child || !parent || child.pathIndex !== parent.pathIndex) {
+      new import_obsidian6.Notice("\u5F53\u524D\u8282\u70B9\u6CA1\u6709\u7236\u8282\u70B9\uFF0C\u65E0\u6CD5\u5728\u4E2D\u95F4\u63D2\u5165");
+      return;
+    }
+    const parentNode = this.nodes.find((item) => item.path === parent.key);
+    const point = parentNode ? { x: (node.x + parentNode.x) / 2, y: (node.y + parentNode.y) / 2 } : { x: node.x - 150, y: node.y };
+    await this.beginCreate(point, parent.key, thought, false, { child: node.path, parent: parent.key, ordinal: child.ordinal });
+  }
+  async beginCreate(point, parent, target = this.editingThought(), newPath = false, insertion) {
     var _a, _b;
     if (this.busy) return;
     target = (_b = (_a = this.file) == null ? void 0 : _a.path) != null ? _b : target;
     if (this.source === "vault" || !target) {
-      new import_obsidian5.Notice("\u8BF7\u5148\u6253\u5F00\u4E00\u4E2A\u601D\u8003\u6587\u4EF6\uFF0C\u6216\u8FD0\u884C\u300C\u65B0\u5EFA\u601D\u8003\u300D\u547D\u4EE4");
+      new import_obsidian6.Notice("\u8BF7\u5148\u6253\u5F00\u4E00\u4E2A\u601D\u8003\u6587\u4EF6\uFF0C\u6216\u8FD0\u884C\u300C\u65B0\u5EFA\u601D\u8003\u300D\u547D\u4EE4");
       return;
     }
     this.closeEditor();
     const draft = { path: `draft:${crypto.randomUUID()}`, label: "", openPath: "", degree: parent ? 1 : 0, thoughts: target ? [target] : [], kind: "note", ...point };
     this.draftNode = draft;
     this.draftParent = parent;
+    this.draftChild = insertion == null ? void 0 : insertion.child;
     this.filterSnapshot();
     this.selected = draft.path;
     this.forceLayout.sync(this.nodes, this.edges, this.plugin.layout.positions);
@@ -2515,6 +2642,16 @@ var BrainOSGraphView = class extends import_obsidian5.FileView {
     const form = this.contentEl.createEl("form", { cls: "brainos-node-title-editor" });
     this.editor = form;
     const title = form.createEl("input", { cls: "brainos-node-title-input", placeholder: "\u8F93\u5165\u540D\u79F0\uFF0C\u540C\u540D\u590D\u7528\u5DF2\u6709\u8282\u70B9", attr: { "aria-label": "\u8282\u70B9\u6807\u9898", autocomplete: "off", required: "" } });
+    if (insertion) title.placeholder = "\u8F93\u5165\u8981\u63D2\u5165\u7684\u65B0\u8282\u70B9\u540D\u79F0";
+    let chosen;
+    this.titleSuggest = new NodeTitleSuggest(this.app, title, target, async () => {
+      const snapshot = await buildThoughtSnapshot(this.app).catch(() => this.snapshot);
+      return [...snapshot.nodes, ...this.snapshot.nodes];
+    }, (candidate) => {
+      if (this.editor !== form || this.busy) return;
+      chosen = candidate;
+      form.requestSubmit();
+    }, () => this.composing, !!insertion);
     let continueAfterSave = false;
     title.addEventListener("compositionstart", () => {
       this.composing = true;
@@ -2523,9 +2660,13 @@ var BrainOSGraphView = class extends import_obsidian5.FileView {
       this.composing = false;
     });
     title.oninput = () => {
+      chosen = void 0;
       title.style.width = `${Math.max(110, Math.min(420, Array.from(title.value).length * 15 + 28))}px`;
     };
     form.onkeydown = (event) => {
+      var _a2;
+      if (event.defaultPrevented) return;
+      if (((_a2 = this.titleSuggest) == null ? void 0 : _a2.isShowing) && ["ArrowUp", "ArrowDown", "Enter", "Escape"].includes(event.key)) return;
       event.stopPropagation();
       const action = titleKeyAction(event);
       if (action === "none") return;
@@ -2549,7 +2690,8 @@ var BrainOSGraphView = class extends import_obsidian5.FileView {
         let committed = false;
         await this.runEdit(async () => {
           const parentNode = parent ? this.nodes.find((node) => node.path === parent) : void 0;
-          const key = await createThoughtNode(this.app, target, label, "", parentNode ? { key: parentNode.path, title: parentNode.label, newPath } : void 0);
+          const reference = (chosen == null ? void 0 : chosen.kind) === "reference" ? chosen.node : void 0;
+          const key = reference ? (await referenceThoughtNode(this.app, target, reference, parentNode, newPath), reference.path) : insertion ? await insertThoughtNode(this.app, target, label, insertion) : await createThoughtNode(this.app, target, label, "", parentNode ? { key: parentNode.path, title: parentNode.label, newPath } : void 0);
           if (!this.snapshot.nodes.some((node) => node.path === key)) this.plugin.layout.positions[key] = { x: draft.x, y: draft.y };
           const session = this.plugin.activeSession;
           if (parent && (newPath || (session == null ? void 0 : session.stepKeys[session.stepKeys.length - 1]) !== parent)) this.plugin.recordSessionStep(parent, target);
@@ -2582,13 +2724,18 @@ var BrainOSGraphView = class extends import_obsidian5.FileView {
     title.focus();
   }
   positionDraftEditor() {
-    if (!this.draftNode || !this.editor) return;
-    const point = this.worldToScreen(this.draftNode);
-    const radius = nodeScreenRadius(this.draftNode.degree, this.zoom, this.graphOptions.nodeSizeMultiplier);
+    var _a;
+    const anchor = (_a = this.draftNode) != null ? _a : this.nodes.find((node) => {
+      var _a2;
+      return node.path === ((_a2 = this.editingNode) == null ? void 0 : _a2.path);
+    });
+    if (!anchor || !this.editor) return;
+    const point = this.worldToScreen(anchor);
+    const radius = nodeScreenRadius(anchor.degree, this.zoom, this.graphOptions.nodeSizeMultiplier);
     this.editor.style.left = `${this.canvas.offsetLeft + point.x}px`;
-    this.editor.style.top = `${this.canvas.offsetTop + point.y + radius + 6}px`;
+    this.editor.style.top = `${this.canvas.offsetTop + point.y + radius + 6 + (this.editingNode ? 15 : 0)}px`;
   }
-  async beginEdit(node, ordinal, focusTitle = false) {
+  async beginEdit(node) {
     var _a, _b;
     if (this.busy || node.placeholder) return;
     if (!node.nodeId) {
@@ -2596,40 +2743,51 @@ var BrainOSGraphView = class extends import_obsidian5.FileView {
       return;
     }
     await this.runEdit(async () => {
-      const original = await readThoughtNode(this.app, node.path, ordinal);
+      const original = await readThoughtNode(this.app, node.path);
       if (this.closed) return;
       this.closeEditor();
-      const form = this.openEditor(node, "\u7F16\u8F91\u8282\u70B9");
-      if (this.file && original.file.path !== this.file.path) form.createDiv({ cls: "brainos-node-editor-target", text: `\u5F15\u7528\u81EA ${original.file.basename}\uFF0C\u7F16\u8F91\u4F1A\u66F4\u65B0\u6765\u6E90\u8282\u70B9` });
-      const title = form.createEl("input", { type: "text", attr: { "aria-label": "\u8282\u70B9\u6807\u9898" } });
+      this.editingNode = node;
+      this.selected = node.path;
+      this.hovered = node.path;
+      this.forceLayout.setSelected(node.path);
+      const form = this.contentEl.createEl("form", { cls: "brainos-node-title-editor" });
+      this.editor = form;
+      const title = form.createEl("input", { cls: "brainos-node-title-input", attr: { "aria-label": "\u8282\u70B9\u6807\u9898", autocomplete: "off" } });
       title.value = original.node.title;
-      const visits = form.createEl("select", { attr: { "aria-label": "\u9009\u62E9\u8282\u70B9\u7684\u7B2C\u51E0\u6B21\u8BB0\u5F55" } });
-      for (const visit of original.occurrences) {
-        visits.createEl("option", { value: String(visit.ordinal), text: "\u7B2C " + (visit.ordinal + 1) + " \u6B21\u8BB0\u5F55 \xB7 \u7B2C " + (visit.path + 1) + " \u6BB5\u601D\u8DEF" });
-      }
-      visits.value = String(original.node.ordinal);
-      form.createDiv({ cls: "brainos-node-editor-target", text: "\u540D\u79F0\u540C\u6B65\u4FEE\u6539\u672C\u6587\u4EF6\u4E2D\u7684\u6240\u6709\u51FA\u73B0\uFF1B\u6B63\u6587\u53EA\u4FEE\u6539\u6240\u9009\u7684\u8FD9\u6B21\u8BB0\u5F55\u3002" });
-      const body = form.createEl("textarea", { cls: "brainos-node-editor-document", attr: { "aria-label": "\u8282\u70B9\u6B63\u6587 Markdown" } });
-      body.value = original.node.body;
-      visits.onchange = () => {
-        if (body.value !== original.node.body || title.value !== original.node.title) {
-          visits.value = String(original.node.ordinal);
-          new import_obsidian5.Notice("\u8BF7\u5148\u4FDD\u5B58\u6216\u53D6\u6D88\u5F53\u524D\u4FEE\u6539\uFF0C\u518D\u5207\u6362\u8BB0\u5F55");
+      const resizeTitle = () => {
+        title.style.width = `${Math.max(110, Math.min(420, Array.from(title.value).length * 15 + 28))}px`;
+      };
+      title.oninput = resizeTitle;
+      resizeTitle();
+      title.addEventListener("compositionstart", () => {
+        this.composing = true;
+      });
+      title.addEventListener("compositionend", () => {
+        this.composing = false;
+      });
+      form.onkeydown = (event) => {
+        event.stopPropagation();
+        const action = titleKeyAction(event);
+        if (action === "none" || this.busy) return;
+        event.preventDefault();
+        if (action === "cancel") {
+          this.closeEditor();
+          this.draw();
           return;
         }
-        void this.beginEdit(node, Number(visits.value));
+        if (!this.composing && title.value.trim()) form.requestSubmit();
       };
-      this.addMarkdownPreviewToggle(form, body, original.file.path);
-      const controls = form.createDiv({ cls: "brainos-node-editor-actions" });
-      const cancel = controls.createEl("button", { text: "\u53D6\u6D88", attr: { type: "button" } });
-      cancel.onclick = () => this.closeEditor();
-      const save = controls.createEl("button", { text: "\u4FDD\u5B58", cls: "mod-cta", attr: { type: "submit" } });
       form.onsubmit = (event) => {
         event.preventDefault();
-        if (this.busy) return;
-        save.disabled = true;
+        if (this.busy || this.composing || !title.value.trim()) return;
+        if (title.value.trim() === original.node.title) {
+          this.closeEditor();
+          this.draw();
+          return;
+        }
+        title.disabled = true;
         void this.runEdit(async () => {
-          const key = await editThoughtNode(this.app, node.path, title.value, body.value, original.node);
+          const key = await editThoughtNode(this.app, node.path, title.value, void 0, original.node);
           if (key !== node.path) {
             const point = this.plugin.layout.positions[node.path];
             if (point) {
@@ -2645,20 +2803,30 @@ var BrainOSGraphView = class extends import_obsidian5.FileView {
           await this.refresh();
           this.plugin.refreshViews();
         }).finally(() => {
-          save.disabled = false;
+          title.disabled = false;
+          if (this.editor === form) title.focus();
         });
       };
-      if (focusTitle) {
-        title.focus();
-        title.select();
-      } else body.focus();
+      title.onblur = () => requestAnimationFrame(() => {
+        if (this.editor !== form || this.busy || this.composing) return;
+        if (title.value.trim()) form.requestSubmit();
+        else {
+          this.closeEditor();
+          this.draw();
+        }
+      });
+      this.positionDraftEditor();
+      this.startLayoutAnimation();
+      this.draw();
+      title.focus();
+      title.select();
     });
   }
   async openReferencePicker() {
     var _a, _b;
     const thought = (_b = (_a = this.file) == null ? void 0 : _a.path) != null ? _b : this.editingThought();
     if (!thought || this.source === "vault") {
-      new import_obsidian5.Notice("\u8BF7\u5148\u6253\u5F00\u4E00\u4E2A\u601D\u8003\u6587\u4EF6");
+      new import_obsidian6.Notice("\u8BF7\u5148\u6253\u5F00\u4E00\u4E2A\u601D\u8003\u6587\u4EF6");
       return;
     }
     await this.runEdit(async () => {
@@ -2678,31 +2846,11 @@ var BrainOSGraphView = class extends import_obsidian5.FileView {
       }).open();
     });
   }
-  openEditor(point, heading) {
-    const form = this.contentEl.createEl("form", { cls: "brainos-node-editor" });
-    this.editor = form;
-    form.createEl("strong", { text: heading });
-    const screen = Number.isFinite(point.x) && Number.isFinite(point.y) ? this.worldToScreen(point) : { x: this.contentEl.clientWidth / 2, y: this.contentEl.clientHeight / 2 };
-    const width = Math.min(320, this.contentEl.clientWidth - 16);
-    form.style.left = `${Math.max(8, Math.min(this.contentEl.clientWidth - width - 8, screen.x - width / 2))}px`;
-    form.style.top = `${Math.max(8, Math.min(this.contentEl.clientHeight - 440, screen.y + 30))}px`;
-    form.onkeydown = (event) => {
-      event.stopPropagation();
-      if (event.key === "Escape" && !this.busy) {
-        event.preventDefault();
-        this.closeEditor();
-      }
-      if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
-        event.preventDefault();
-        form.requestSubmit();
-      }
-    };
-    return form;
-  }
   closeEditor() {
     var _a, _b, _c;
-    (_a = this.editorComponent) == null ? void 0 : _a.unload();
-    this.editorComponent = void 0;
+    (_a = this.titleSuggest) == null ? void 0 : _a.dispose();
+    this.titleSuggest = void 0;
+    this.editingNode = void 0;
     (_b = this.editor) == null ? void 0 : _b.remove();
     this.editor = void 0;
     if (this.draftNode) {
@@ -2710,6 +2858,7 @@ var BrainOSGraphView = class extends import_obsidian5.FileView {
       this.forceLayout.unpin(path);
       this.draftNode = void 0;
       this.draftParent = void 0;
+      this.draftChild = void 0;
       this.nodes = this.nodes.filter((node) => node.path !== path);
       this.edges = this.edges.filter((edge) => edge.from !== path && edge.to !== path);
       if (this.selected === path) this.selected = void 0;
@@ -2718,41 +2867,13 @@ var BrainOSGraphView = class extends import_obsidian5.FileView {
     this.composing = false;
     if (!this.closed) (_c = this.canvas) == null ? void 0 : _c.focus();
   }
-  /** Add an in-place Markdown edit/preview switch without leaving graph context. */
-  addMarkdownPreviewToggle(form, body, sourcePath) {
-    const preview = form.createDiv({ cls: "brainos-node-editor-preview" });
-    preview.style.display = "none";
-    const controls = form.createDiv({ cls: "brainos-node-editor-actions" });
-    const toggle = controls.createEl("button", { text: "\u9884\u89C8", attr: { type: "button" } });
-    toggle.onclick = async () => {
-      var _a, _b;
-      const showing = preview.style.display !== "none";
-      if (showing) {
-        preview.style.display = "none";
-        body.style.display = "";
-        toggle.setText("\u9884\u89C8");
-        (_a = this.editorComponent) == null ? void 0 : _a.unload();
-        this.editorComponent = void 0;
-        return;
-      }
-      preview.empty();
-      const component = new import_obsidian5.Component();
-      component.load();
-      (_b = this.editorComponent) == null ? void 0 : _b.unload();
-      this.editorComponent = component;
-      await import_obsidian5.MarkdownRenderer.render(this.app, body.value, preview, sourcePath, component);
-      body.style.display = "none";
-      preview.style.display = "block";
-      toggle.setText("\u7F16\u8F91");
-    };
-  }
   async runEdit(action) {
     if (this.busy) return;
     this.busy = true;
     try {
       await action();
     } catch (error) {
-      new import_obsidian5.Notice(error instanceof Error ? error.message : String(error));
+      new import_obsidian6.Notice(error instanceof Error ? error.message : String(error));
     } finally {
       this.busy = false;
     }
@@ -2761,7 +2882,7 @@ var BrainOSGraphView = class extends import_obsidian5.FileView {
     var _a, _b;
     const thought = (_b = (_a = this.file) == null ? void 0 : _a.path) != null ? _b : this.editingThought(from);
     if (this.source === "vault" || !thought) {
-      new import_obsidian5.Notice("\u8BF7\u5728\u601D\u8003\u6587\u4EF6\u5185\u7EC4\u5408\u8282\u70B9\uFF1B\u5168\u5E93\u56FE\u8C31\u4EC5\u7528\u4E8E\u67E5\u770B\u7B14\u8BB0\u53CC\u94FE");
+      new import_obsidian6.Notice("\u8BF7\u5728\u601D\u8003\u6587\u4EF6\u5185\u7EC4\u5408\u8282\u70B9\uFF1B\u5168\u5E93\u56FE\u8C31\u4EC5\u7528\u4E8E\u67E5\u770B\u7B14\u8BB0\u53CC\u94FE");
       return;
     }
     if (from.placeholder || to.placeholder) return;
@@ -2799,7 +2920,7 @@ var BrainOSGraphView = class extends import_obsidian5.FileView {
     event.preventDefault();
     if (this.editor || this.busy) return;
     const rect = this.canvas.getBoundingClientRect(), x = event.clientX - rect.left, y = event.clientY - rect.top;
-    const node = this.nodeAt(x, y), menu = new import_obsidian5.Menu();
+    const node = this.nodeAt(x, y), menu = new import_obsidian6.Menu();
     if (node) {
       this.selected = node.path;
       this.forceLayout.setSelected(this.selected);
@@ -2835,7 +2956,7 @@ var BrainOSGraphView = class extends import_obsidian5.FileView {
         }
         const thought = this.thoughtPath || (edge.thoughts.length === 1 ? edge.thoughts[0] : void 0);
         if (!thought) {
-          new import_obsidian5.Notice("\u8FDE\u7EBF\u5C5E\u4E8E\u591A\u4E2A\u601D\u8003\uFF0C\u8BF7\u5148\u9009\u62E9\u8981\u4FEE\u6539\u7684\u601D\u8003");
+          new import_obsidian6.Notice("\u8FDE\u7EBF\u5C5E\u4E8E\u591A\u4E2A\u601D\u8003\uFF0C\u8BF7\u5148\u9009\u62E9\u8981\u4FEE\u6539\u7684\u601D\u8003");
           return;
         }
         void this.runEdit(async () => {
@@ -2848,7 +2969,7 @@ var BrainOSGraphView = class extends import_obsidian5.FileView {
     menu.showAtMouseEvent(event);
   }
 };
-var RemoveNodeModal = class extends import_obsidian5.Modal {
+var RemoveNodeModal = class extends import_obsidian6.Modal {
   constructor(app, label, owned, remove) {
     super(app);
     this.label = label;
@@ -2858,7 +2979,7 @@ var RemoveNodeModal = class extends import_obsidian5.Modal {
   onOpen() {
     this.titleEl.setText(`\u79FB\u9664\u300C${this.label}\u300D\uFF1F`);
     this.contentEl.createEl("p", { text: this.owned ? "\u5220\u9664\u672C\u6587\u4EF6\u4E2D\u8FD9\u4E2A\u540D\u79F0\u7684\u5168\u90E8\u8BB0\u5F55\u53CA\u76F8\u90BB\u8FDE\u7EBF\u3002\u5176\u4ED6\u601D\u8003\u5BF9\u5B83\u7684\u5F15\u7528\u4F1A\u663E\u793A\u4E3A\u5931\u6548\uFF1B\u4E0D\u4F1A\u5220\u9664\u601D\u8003\u6587\u4EF6\u3002" : "\u4EC5\u79FB\u9664\u672C\u601D\u8003\u4E2D\u7684\u5F15\u7528\u53CA\u76F8\u90BB\u5173\u7CFB\uFF0C\u6765\u6E90\u8282\u70B9\u7684\u6807\u9898\u548C\u6B63\u6587\u4FDD\u6301\u4E0D\u53D8\u3002" });
-    new import_obsidian5.Setting(this.contentEl).addButton((button) => button.setButtonText("\u53D6\u6D88").onClick(() => this.close())).addButton((button) => button.setButtonText(this.owned ? "\u5220\u9664\u8282\u70B9" : "\u79FB\u9664\u5F15\u7528").setWarning().onClick(() => {
+    new import_obsidian6.Setting(this.contentEl).addButton((button) => button.setButtonText("\u53D6\u6D88").onClick(() => this.close())).addButton((button) => button.setButtonText(this.owned ? "\u5220\u9664\u8282\u70B9" : "\u79FB\u9664\u5F15\u7528").setWarning().onClick(() => {
       this.close();
       void this.remove();
     }));
@@ -2867,7 +2988,7 @@ var RemoveNodeModal = class extends import_obsidian5.Modal {
     this.contentEl.empty();
   }
 };
-var NodeReferenceModal = class extends import_obsidian5.SuggestModal {
+var NodeReferenceModal = class extends import_obsidian6.SuggestModal {
   constructor(app, nodes, choose) {
     super(app);
     this.nodes = nodes;
@@ -2901,7 +3022,7 @@ var UnconfiguredAIProvider = class {
 // src/main.ts
 var DATA_VERSION = 5;
 var DEFAULT_SETTINGS = { noteFolder: DEFAULT_NOTE_FOLDER };
-var BrainOSPlugin = class extends import_obsidian6.Plugin {
+var BrainOSPlugin = class extends import_obsidian7.Plugin {
   constructor() {
     super(...arguments);
     __publicField(this, "layout", {
@@ -2948,7 +3069,7 @@ var BrainOSPlugin = class extends import_obsidian6.Plugin {
     this.addRibbonIcon("git-branch", "\u5207\u6362\u601D\u7EF4\u89C6\u56FE", () => void this.toggleMindView());
     this.addCommand({ id: "toggle-mind-view", name: "\u5207\u6362\u7F16\u8F91\uFF0F\u601D\u7EF4\u89C6\u56FE", checkCallback: (checking) => {
       var _a2, _b2;
-      const supported = !!((_a2 = this.app.workspace.getActiveViewOfType(import_obsidian6.MarkdownView)) == null ? void 0 : _a2.file) || !!((_b2 = this.app.workspace.getActiveViewOfType(BrainOSGraphView)) == null ? void 0 : _b2.file);
+      const supported = !!((_a2 = this.app.workspace.getActiveViewOfType(import_obsidian7.MarkdownView)) == null ? void 0 : _a2.file) || !!((_b2 = this.app.workspace.getActiveViewOfType(BrainOSGraphView)) == null ? void 0 : _b2.file);
       if (supported && !checking) void this.toggleMindView();
       return supported;
     } });
@@ -3001,7 +3122,7 @@ var BrainOSPlugin = class extends import_obsidian6.Plugin {
     const views = /* @__PURE__ */ new Set();
     this.app.workspace.iterateAllLeaves((leaf) => {
       var _a;
-      if (!(leaf.view instanceof import_obsidian6.MarkdownView)) return;
+      if (!(leaf.view instanceof import_obsidian7.MarkdownView)) return;
       const view = leaf.view;
       views.add(view);
       const existing = this.headerActions.get(view);
@@ -3036,7 +3157,7 @@ var BrainOSPlugin = class extends import_obsidian6.Plugin {
         cls: "text-icon-button tappable mod-pill empty-state-action brainos-new-thought-action",
         attr: { tabindex: "0", role: "button", "aria-label": "\u65B0\u5EFA\u601D\u8003" }
       });
-      (0, import_obsidian6.setIcon)(button.createSpan({ cls: "text-button-icon" }), "git-branch");
+      (0, import_obsidian7.setIcon)(button.createSpan({ cls: "text-button-icon" }), "git-branch");
       button.createSpan({ cls: "text-button-label", text: "\u65B0\u5EFA\u601D\u8003" });
       button.onclick = () => {
         void this.createNewThought("\u672A\u547D\u540D\u601D\u8003", leaf);
@@ -3066,7 +3187,7 @@ var BrainOSPlugin = class extends import_obsidian6.Plugin {
       await this.openMarkdownView(mind.leaf, mind.file);
       return;
     }
-    const markdown = this.app.workspace.getActiveViewOfType(import_obsidian6.MarkdownView);
+    const markdown = this.app.workspace.getActiveViewOfType(import_obsidian7.MarkdownView);
     if (markdown == null ? void 0 : markdown.file) {
       await this.openMindView(markdown.leaf, markdown.file);
       return;
@@ -3084,7 +3205,7 @@ var BrainOSPlugin = class extends import_obsidian6.Plugin {
       this.refreshViews();
       return true;
     } catch (error) {
-      new import_obsidian6.Notice(error instanceof Error ? error.message : String(error));
+      new import_obsidian7.Notice(error instanceof Error ? error.message : String(error));
       return false;
     } finally {
       this.creatingThought = false;
@@ -3127,12 +3248,12 @@ var BrainOSPlugin = class extends import_obsidian6.Plugin {
   startSession(thoughtPath) {
     var _a, _b;
     if (this.activeSession) {
-      new import_obsidian6.Notice("\u5DF2\u6709\u4E00\u4E2A BrainOS Session \u6B63\u5728\u8BB0\u5F55");
+      new import_obsidian7.Notice("\u5DF2\u6709\u4E00\u4E2A BrainOS Session \u6B63\u5728\u8BB0\u5F55");
       return;
     }
     const path = (thoughtPath == null ? void 0 : thoughtPath.trim()) || void 0;
     const thoughtFile = path ? this.app.vault.getAbstractFileByPath(path) : void 0;
-    const thoughtTitle = thoughtFile instanceof import_obsidian6.TFile ? (_b = (_a = this.app.metadataCache.getFileCache(thoughtFile)) == null ? void 0 : _a.frontmatter) == null ? void 0 : _b.title : void 0;
+    const thoughtTitle = thoughtFile instanceof import_obsidian7.TFile ? (_b = (_a = this.app.metadataCache.getFileCache(thoughtFile)) == null ? void 0 : _a.frontmatter) == null ? void 0 : _b.title : void 0;
     const title = path ? String(thoughtTitle != null ? thoughtTitle : path) : "\u672A\u547D\u540D Session";
     const session = {
       id: crypto.randomUUID(),
@@ -3144,7 +3265,7 @@ var BrainOSPlugin = class extends import_obsidian6.Plugin {
     this.layout.sessions.unshift(session);
     this.layout.activeSessionId = session.id;
     void this.saveLayout();
-    new import_obsidian6.Notice(`Session \u5DF2\u5F00\u59CB\uFF1A${session.title}`);
+    new import_obsidian7.Notice(`Session \u5DF2\u5F00\u59CB\uFF1A${session.title}`);
     this.refreshViews();
   }
   endSession() {
@@ -3153,7 +3274,7 @@ var BrainOSPlugin = class extends import_obsidian6.Plugin {
     session.endedAt = (/* @__PURE__ */ new Date()).toISOString();
     this.layout.activeSessionId = void 0;
     void this.saveLayout();
-    new import_obsidian6.Notice(`Session \u5DF2\u4FDD\u5B58\uFF1A${session.stepKeys.length} \u6B65`);
+    new import_obsidian7.Notice(`Session \u5DF2\u4FDD\u5B58\uFF1A${session.stepKeys.length} \u6B65`);
     this.refreshViews();
   }
   recordSessionStep(stepPath, thoughtPath) {
@@ -3173,7 +3294,7 @@ function isPoint(value) {
 function isViewport(value) {
   return isRecord(value) && Number.isFinite(value.x) && Number.isFinite(value.y) && Math.abs(value.x) <= 1e7 && Math.abs(value.y) <= 1e7 && Number.isFinite(value.zoom) && value.zoom > 0 && value.zoom <= 100;
 }
-var BrainOSSettingTab = class extends import_obsidian6.PluginSettingTab {
+var BrainOSSettingTab = class extends import_obsidian7.PluginSettingTab {
   constructor(app, plugin) {
     super(app, plugin);
     this.plugin = plugin;
@@ -3181,15 +3302,15 @@ var BrainOSSettingTab = class extends import_obsidian6.PluginSettingTab {
   display() {
     this.containerEl.empty();
     this.containerEl.createEl("h2", { text: "BrainOS Graph" });
-    new import_obsidian6.Setting(this.containerEl).setName("\u65B0\u601D\u8003\u5B58\u653E\u4F4D\u7F6E").setDesc("\u76F4\u63A5\u4F7F\u7528\u8FD9\u4E2A\u7B14\u8BB0\u5E93\u5185\u8DEF\u5F84\uFF0C\u4E0D\u8FFD\u52A0\u5B50\u6587\u4EF6\u5939\uFF1B\u7559\u7A7A\u5B58\u5230\u7B14\u8BB0\u5E93\u6839\u76EE\u5F55\u3002").addText((text) => text.setPlaceholder("\u7559\u7A7A\u4F7F\u7528\u6839\u76EE\u5F55").setValue(this.plugin.layout.settings.noteFolder).onChange(async (value) => {
+    new import_obsidian7.Setting(this.containerEl).setName("\u65B0\u601D\u8003\u5B58\u653E\u4F4D\u7F6E").setDesc("\u76F4\u63A5\u4F7F\u7528\u8FD9\u4E2A\u7B14\u8BB0\u5E93\u5185\u8DEF\u5F84\uFF0C\u4E0D\u8FFD\u52A0\u5B50\u6587\u4EF6\u5939\uFF1B\u7559\u7A7A\u5B58\u5230\u7B14\u8BB0\u5E93\u6839\u76EE\u5F55\u3002").addText((text) => text.setPlaceholder("\u7559\u7A7A\u4F7F\u7528\u6839\u76EE\u5F55").setValue(this.plugin.layout.settings.noteFolder).onChange(async (value) => {
       this.plugin.layout.settings.noteFolder = value.trim();
       await this.plugin.saveLayout();
     }));
-    new import_obsidian6.Setting(this.containerEl).setName("\u91CD\u65B0\u751F\u6210\u5E03\u5C40").setDesc("\u5220\u9664\u4FDD\u5B58\u7684\u5750\u6807\uFF0C\u4E0B\u4E00\u6B21\u6253\u5F00\u56FE\u8C31\u65F6\u81EA\u52A8\u6392\u5217\u8282\u70B9\u3002").addButton((button) => button.setButtonText("\u91CD\u7F6E").onClick(async () => {
+    new import_obsidian7.Setting(this.containerEl).setName("\u91CD\u65B0\u751F\u6210\u5E03\u5C40").setDesc("\u5220\u9664\u4FDD\u5B58\u7684\u5750\u6807\uFF0C\u4E0B\u4E00\u6B21\u6253\u5F00\u56FE\u8C31\u65F6\u81EA\u52A8\u6392\u5217\u8282\u70B9\u3002").addButton((button) => button.setButtonText("\u91CD\u7F6E").onClick(async () => {
       this.plugin.layout.positions = {};
       await this.plugin.saveLayout();
       this.plugin.refreshViews();
-      new import_obsidian6.Notice("\u56FE\u8C31\u5E03\u5C40\u5DF2\u91CD\u7F6E");
+      new import_obsidian7.Notice("\u56FE\u8C31\u5E03\u5C40\u5DF2\u91CD\u7F6E");
     }));
   }
 };

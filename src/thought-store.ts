@@ -3,7 +3,7 @@ import { parseThoughtState, stepKey } from "./thoughts";
 import type { GraphNode, GraphSnapshot } from "./thoughts";
 import {
   DocumentNode, NodeEditSnapshot, ThoughtDocument, appendDocumentContinuation, appendDocumentStep, cleanNodeTitle,
-  documentLinks, nodeKey, nodeRevision, occurrenceTitle, parseThoughtDocument, removeDocumentNode,
+  documentLinks, insertDocumentStepBefore, nodeKey, nodeRevision, occurrenceTitle, parseThoughtDocument, removeDocumentNode,
   removeDocumentRelation, splitNodeKey, titleID, unlinkDocumentBody, updateDocumentNode, wikiLink,
 } from "./thought-document";
 import { convertParagraphThought, stripBrainOSProperties, uniqueLegacyTitle } from "./thought-migration";
@@ -141,7 +141,23 @@ export async function createThoughtNode(app: App, owner: string, title: string, 
   });
   return nodeKey(owner, titleID(value));
 }
-export async function editThoughtNode(app: App, key: string, title: string, body: string, expected?: NodeEditSnapshot) {
+export type InsertThoughtTarget = { child: string; parent: string; ordinal: number };
+export async function insertThoughtNode(app: App, owner: string, title: string, target: InsertThoughtTarget) {
+  const keys = await referenceKeys(app, owner);
+  await mutateThought(app, owner, markdown => {
+    const visits = parseThoughtDocument(markdown).occurrences;
+    const matches = visits.flatMap((visit, index) => keys.entry(visit.id) === target.child && visit.ordinal === target.ordinal ? [index] : []);
+    if (matches.length !== 1) throw new Error("当前节点的记录已变化，请刷新后重试");
+    const index = matches[0], previous = visits[index - 1];
+    if (!previous || previous.path !== visits[index].path || keys.entry(previous.id) !== target.parent) {
+      throw new Error("父节点或路径已变化，请刷新后重试");
+    }
+    return insertDocumentStepBefore(markdown, index, title);
+  });
+  return nodeKey(owner, titleID(cleanNodeTitle(title)));
+}
+
+export async function editThoughtNode(app: App, key: string, title: string, body: string | undefined, expected?: NodeEditSnapshot) {
   const ref = splitNodeKey(key);
   if (!ref) throw new Error("请选择思考文件中的节点");
   const value = cleanNodeTitle(title);
@@ -181,11 +197,14 @@ async function renameIncomingReferences(app: App, source: string, oldTitle: stri
 export async function linkThoughtNodes(app: App, owner: string, from: GraphNode, to: GraphNode) {
   await mutateThought(app, owner, text => appendDocumentContinuation(text, graphEntry(owner, from, text), graphEntry(owner, to, text)));
 }
-export async function referenceThoughtNode(app: App, owner: string, node: GraphNode, parent?: GraphNode) {
+export async function referenceThoughtNode(app: App, owner: string, node: GraphNode, parent?: GraphNode, newPath = false) {
   if (!node.nodeId || !node.ownerPath) throw new Error("请选择思考文件中的节点");
   await readThoughtNode(app, node.path);
-  await mutateThought(app, owner, text => appendDocumentContinuation(text,
-    parent ? graphEntry(owner, parent, text) : undefined, graphEntry(owner, node, text)));
+  await mutateThought(app, owner, text => {
+    const from = parent ? graphEntry(owner, parent, text) : undefined, to = graphEntry(owner, node, text);
+    if (from && newPath) return appendDocumentStep(appendDocumentStep(text, from, "", true), to);
+    return appendDocumentContinuation(text, from, to);
+  });
 }
 
 /** Resolve references before the atomic edit; offsets are always computed on the current text. */
