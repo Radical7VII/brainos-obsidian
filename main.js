@@ -33,6 +33,111 @@ var import_obsidian6 = require("obsidian");
 // src/thoughts.ts
 var import_obsidian2 = require("obsidian");
 
+// src/graph-history.ts
+var histories = /* @__PURE__ */ new WeakMap();
+function graphHistory(app) {
+  let history = histories.get(app);
+  if (!history) {
+    history = new GraphHistory(app);
+    histories.set(app, history);
+  }
+  return history;
+}
+async function processGraphFile(app, file, edit) {
+  let before = "", after = "";
+  await app.vault.process(file, (current) => {
+    before = current;
+    after = edit(current);
+    return after;
+  });
+  if (before !== after) graphHistory(app).track({ file, before, after });
+}
+var GraphHistory = class {
+  constructor(app) {
+    this.app = app;
+    __publicField(this, "undoEntries", []);
+    __publicField(this, "redoEntries", []);
+    __publicField(this, "active");
+    __publicField(this, "interrupted", false);
+    __publicField(this, "queue", Promise.resolve());
+  }
+  serial(action) {
+    const next = this.queue.then(action);
+    this.queue = next.catch(() => {
+    });
+    return next;
+  }
+  track(change) {
+    var _a;
+    if (!this.active) return;
+    const previous = this.active.get(change.file.path);
+    if (previous && previous.after !== change.before) this.interrupted = true;
+    this.active.set(change.file.path, { ...change, before: (_a = previous == null ? void 0 : previous.before) != null ? _a : change.before });
+  }
+  record(action, state) {
+    return this.serial(async () => {
+      const before = state == null ? void 0 : state.capture();
+      const changes = this.active = /* @__PURE__ */ new Map();
+      this.interrupted = false;
+      try {
+        await action();
+      } finally {
+        this.active = void 0;
+        const actual = [...changes.values()].filter((change) => change.before !== change.after);
+        if (actual.length && !this.interrupted) {
+          const after = state == null ? void 0 : state.capture();
+          this.undoEntries.push({
+            changes: actual,
+            undoState: state ? () => state.restore(before, after) : void 0,
+            redoState: state ? () => state.restore(after, before) : void 0
+          });
+          if (this.undoEntries.length > 50) this.undoEntries.shift();
+          this.redoEntries = [];
+        }
+      }
+    });
+  }
+  undo() {
+    return this.move(this.undoEntries, this.redoEntries, false);
+  }
+  redo() {
+    return this.move(this.redoEntries, this.undoEntries, true);
+  }
+  move(from, to, redo) {
+    return this.serial(async () => {
+      var _a, _b;
+      const entry2 = from[from.length - 1];
+      if (!entry2) return false;
+      const expected = (change) => redo ? change.before : change.after;
+      const replacement = (change) => redo ? change.after : change.before;
+      for (const change of entry2.changes) {
+        if (this.app.vault.getAbstractFileByPath(change.file.path) !== change.file || await this.app.vault.read(change.file) !== expected(change)) {
+          throw new Error("\u76F8\u5173\u7B14\u8BB0\u5DF2\u5728\u5176\u4ED6\u4F4D\u7F6E\u4FEE\u6539\uFF0C\u65E0\u6CD5\u64A4\u9500\u6216\u91CD\u505A\uFF0C\u539F\u5185\u5BB9\u672A\u8986\u76D6");
+        }
+      }
+      const applied = [];
+      try {
+        for (const change of entry2.changes) {
+          await this.app.vault.process(change.file, (current) => {
+            if (current !== expected(change)) throw new Error("\u7B14\u8BB0\u5DF2\u53D8\u5316\uFF0C\u65E0\u6CD5\u64A4\u9500\u6216\u91CD\u505A");
+            return replacement(change);
+          });
+          applied.push(change);
+        }
+        await (redo ? (_a = entry2.redoState) == null ? void 0 : _a.call(entry2) : (_b = entry2.undoState) == null ? void 0 : _b.call(entry2));
+      } catch (error) {
+        for (const change of applied.reverse()) {
+          await this.app.vault.process(change.file, (current) => current === replacement(change) ? expected(change) : current);
+        }
+        throw error;
+      }
+      from.pop();
+      to.push(entry2);
+      return true;
+    });
+  }
+};
+
 // src/thought-store.ts
 var import_obsidian = require("obsidian");
 
@@ -491,7 +596,7 @@ async function loadThoughtDocument(app, file, folder) {
 }
 async function mutateThought(app, filePath, edit) {
   const file = requireFile(app, filePath), loaded = await loadThoughtDocument(app, file);
-  await app.vault.process(file, (current) => {
+  await processGraphFile(app, file, (current) => {
     if (loaded.legacy && current !== loaded.original) throw new Error("\u65E7\u601D\u8003\u5728\u8F6C\u6362\u671F\u95F4\u5DF2\u53D8\u5316\uFF0C\u8BF7\u5237\u65B0\u540E\u91CD\u8BD5");
     if (!loaded.legacy && (LEGACY_STATE.test(current) || convertParagraphThought(current))) throw new Error("\u601D\u8003\u683C\u5F0F\u5DF2\u53D8\u5316\uFF0C\u8BF7\u5237\u65B0\u540E\u91CD\u8BD5");
     const next = edit(loaded.legacy ? loaded.markdown : current, loaded);
@@ -514,7 +619,7 @@ async function migrateIncomingAnchors(app, source, aliases) {
   };
   for (const file of app.vault.getMarkdownFiles()) {
     const before = await app.vault.cachedRead(file);
-    if (rewrite(before, file.path) !== before) await app.vault.process(file, (current) => rewrite(current, file.path));
+    if (rewrite(before, file.path) !== before) await processGraphFile(app, file, (current) => rewrite(current, file.path));
   }
 }
 function findNode(loaded, id) {
@@ -635,7 +740,7 @@ async function renameIncomingReferences(app, source, oldTitle, title) {
   for (const file of app.vault.getMarkdownFiles()) {
     const before = await app.vault.cachedRead(file);
     if (rewrite(before, file.path) === before) continue;
-    await app.vault.process(file, (current) => rewrite(current, file.path));
+    await processGraphFile(app, file, (current) => rewrite(current, file.path));
   }
 }
 async function linkThoughtNodes(app, owner, from, to) {
@@ -667,22 +772,29 @@ async function referenceKeys(app, owner) {
     link: (target, label) => links.get(JSON.stringify([target, label]))
   };
 }
-async function unlinkThoughtNodes(app, owner, from, to) {
+async function unlinkThoughtNodes(app, owner, from, to, bidirectional = false) {
   const keys = await referenceKeys(app, owner);
   await mutateThought(app, owner, (text) => {
-    let next = removeDocumentRelation(text, (a, b) => keys.entry(a) === from && keys.entry(b) === to);
-    for (const node of parseThoughtDocument(next).nodes.filter((node2) => keys.entry(node2.id) === from)) {
-      next = unlinkDocumentBody(next, node.id, (target, label) => keys.link(target, label) === to);
+    const matches = (a, b) => a === from && b === to || bidirectional && a === to && b === from;
+    let next = removeDocumentRelation(text, (a, b) => matches(keys.entry(a), keys.entry(b)));
+    for (const node of parseThoughtDocument(next).nodes.filter((node2) => keys.entry(node2.id) === from || bidirectional && keys.entry(node2.id) === to)) {
+      next = unlinkDocumentBody(next, node.id, (target, label) => matches(keys.entry(node.id), keys.link(target, label)));
     }
     return next;
   });
 }
 async function removeThoughtNode(app, owner, key) {
-  const keys = await referenceKeys(app, owner);
+  return removeThoughtNodes(app, owner, [key]);
+}
+async function removeThoughtNodes(app, owner, selected) {
+  const keys = await referenceKeys(app, owner), removed = new Set(selected);
   await mutateThought(app, owner, (text) => {
     let next = text;
-    for (const node of parseThoughtDocument(next).nodes.filter((node2) => keys.entry(node2.id) === key)) next = removeDocumentNode(next, node.id);
-    for (const node of parseThoughtDocument(next).nodes) next = unlinkDocumentBody(next, node.id, (target, label) => keys.link(target, label) === key);
+    for (const node of parseThoughtDocument(next).nodes.filter((node2) => removed.has(keys.entry(node2.id)))) next = removeDocumentNode(next, node.id);
+    for (const node of parseThoughtDocument(next).nodes) next = unlinkDocumentBody(next, node.id, (target, label) => {
+      var _a;
+      return removed.has((_a = keys.link(target, label)) != null ? _a : "");
+    });
     return next;
   });
 }
@@ -1522,7 +1634,7 @@ async function removeVaultLink(app, from, to) {
     return (target == null ? void 0 : target.path) === to || `unresolved:${parsed.path}` === to;
   }).sort((a, b) => b.position.start.offset - a.position.start.offset);
   if (!references.length) throw new Error("\u8BE5\u8FDE\u7EBF\u53EF\u80FD\u6765\u81EA\u5C5E\u6027\u6216\u7D22\u5F15\u5C1A\u672A\u66F4\u65B0\uFF0C\u8BF7\u6253\u5F00\u6765\u6E90\u7B14\u8BB0\u4FEE\u6539");
-  await app.vault.process(source, (current) => {
+  await processGraphFile(app, source, (current) => {
     var _a2;
     let next = current;
     for (const reference of references) {
@@ -1713,6 +1825,9 @@ var BrainOSGraphView = class extends import_obsidian6.FileView {
     __publicField(this, "zoom", 1);
     __publicField(this, "pan", { x: 0, y: 0 });
     __publicField(this, "selected");
+    __publicField(this, "selectedNodes", /* @__PURE__ */ new Set());
+    __publicField(this, "suppressContextMenu", false);
+    __publicField(this, "hoveredEdge");
     __publicField(this, "hovered");
     __publicField(this, "gesture");
     __publicField(this, "editor");
@@ -1777,6 +1892,7 @@ var BrainOSGraphView = class extends import_obsidian6.FileView {
     this.thoughtPath = file.path;
     this.localCenter = void 0;
     this.selected = void 0;
+    this.selectedNodes.clear();
     this.hovered = void 0;
     this.restoreViewport();
     if (this.canvas) await this.refresh();
@@ -1838,6 +1954,7 @@ var BrainOSGraphView = class extends import_obsidian6.FileView {
     this.registerDomEvent(this.canvas, "pointerleave", () => {
       if (!this.gesture) {
         this.hovered = void 0;
+        this.clearEdgeHover();
         this.draw();
       }
     });
@@ -1911,6 +2028,7 @@ var BrainOSGraphView = class extends import_obsidian6.FileView {
     const result = selectGraph(visible, (_b = (_a = this.search) == null ? void 0 : _a.value.trim()) != null ? _b : "", this.plugin.layout.graph.filter, this.localCenter);
     this.nodes = this.draftNode ? result.nodes.filter((node) => !node.placeholder) : result.nodes;
     this.edges = result.edges;
+    this.selectedNodes = new Set([...this.selectedNodes].filter((path) => this.nodes.some((node) => node.path === path)));
     if (this.draftNode) {
       this.nodes.push(this.draftNode);
       if (this.draftChild) {
@@ -2005,6 +2123,7 @@ var BrainOSGraphView = class extends import_obsidian6.FileView {
           this.persistViewport();
           this.closeEditor();
           this.thoughtPath = value;
+          this.selectedNodes.clear();
           this.selected = void 0;
           this.restoreViewport();
           this.filterSnapshot();
@@ -2166,6 +2285,7 @@ var BrainOSGraphView = class extends import_obsidian6.FileView {
       new import_obsidian6.Notice("\u5F53\u524D\u6587\u4EF6\u672A\u51FA\u73B0\u5728\u6240\u9009\u601D\u8003\u56FE\u8C31\u4E2D");
       return;
     }
+    this.selectedNodes.clear();
     this.selected = node.path;
     this.hovered = node.path;
     this.forceLayout.setSelected(this.selected);
@@ -2205,8 +2325,9 @@ var BrainOSGraphView = class extends import_obsidian6.FileView {
     return closest;
   }
   draw() {
-    var _a, _b, _c, _d, _e, _f;
+    var _a, _b, _c, _d, _e, _f, _g;
     if (!this.canvas || this.closed) return;
+    if (this.hoveredEdge && !this.edges.includes(this.hoveredEdge)) this.clearEdgeHover();
     const ctx = this.canvas.getContext("2d");
     if (!ctx) return;
     const width = this.canvas.clientWidth, height = this.canvas.clientHeight;
@@ -2266,13 +2387,15 @@ var BrainOSGraphView = class extends import_obsidian6.FileView {
         nodeScreenRadius((_a2 = node.weight) != null ? _a2 : node.degree, zoom, options.nodeSizeMultiplier)
       ];
     }));
-    const strokes = /* @__PURE__ */ new Set();
+    const directions = new Set(this.edges.map((edge) => JSON.stringify([edge.from, edge.to])));
+    let flowing = false;
     ctx.lineCap = "round";
     for (const edge of this.edges) {
       const a = byPath.get(edge.from), b = byPath.get(edge.to);
       const p = points.get(edge.from), q = points.get(edge.to);
       if (!a || !b || !p || !q || edge.from === edge.to) continue;
-      const edgeActive = edge.from === focus || edge.to === focus;
+      const edgeSelected = !!this.hoveredEdge && edgeStrokeKey(edge.from, edge.to) === edgeStrokeKey(this.hoveredEdge.from, this.hoveredEdge.to);
+      const edgeActive = edgeSelected || edge.from === focus || edge.to === focus;
       const strokeKey = edgeStrokeKey(edge.from, edge.to);
       const alpha = opacity("e:" + strokeKey, !focus || edgeActive ? 1 : 0.2);
       if (!edgeInViewport(p, q, width, height, options.lineSizeMultiplier + 2)) continue;
@@ -2282,13 +2405,18 @@ var BrainOSGraphView = class extends import_obsidian6.FileView {
       const sourceRadius = radii.get(a.path), targetRadius = radii.get(b.path);
       ctx.globalAlpha = alpha;
       ctx.strokeStyle = edgeActive ? accent : edgeColor;
-      ctx.lineWidth = Math.max(0.1, options.lineSizeMultiplier);
-      if (!strokes.has(strokeKey) && distance > sourceRadius + targetRadius) {
-        strokes.add(strokeKey);
+      ctx.lineWidth = Math.max(0.1, options.lineSizeMultiplier) + (edgeSelected ? 2 : 0);
+      const lane = directions.has(JSON.stringify([edge.to, edge.from])) ? 3 : 0;
+      if (distance > sourceRadius + targetRadius) {
+        flowing = true;
+        ctx.setLineDash([8, 6]);
+        ctx.lineDashOffset = -(now / 1e3 * 28) % 14;
         ctx.beginPath();
-        ctx.moveTo(p.x + ux * sourceRadius, p.y + uy * sourceRadius);
-        ctx.lineTo(q.x - ux * targetRadius, q.y - uy * targetRadius);
+        ctx.moveTo(p.x + ux * sourceRadius - uy * lane, p.y + uy * sourceRadius + ux * lane);
+        ctx.lineTo(q.x - ux * targetRadius - uy * lane, q.y - uy * targetRadius + ux * lane);
         ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.lineDashOffset = 0;
       }
       if (options.showArrows && distance > sourceRadius + targetRadius + 10) {
         const arrowAlpha = Math.max(0, Math.min(1, 2 * (zoom - 0.3)));
@@ -2335,11 +2463,11 @@ var BrainOSGraphView = class extends import_obsidian6.FileView {
       }, width, height);
       if (circleVisible) {
         ctx.globalAlpha = alpha * (kind === "unresolved" || node.placeholder ? 0.5 : 1);
-        ctx.fillStyle = isFocus ? accent : node.path === this.selected ? focusedFill : isMatch ? focusedFill : node.placeholder ? dim : typeColors[kind];
+        ctx.fillStyle = isFocus ? accent : node.path === this.selected || this.selectedNodes.has(node.path) ? focusedFill : isMatch ? focusedFill : node.placeholder ? dim : typeColors[kind];
         ctx.beginPath();
         ctx.arc(point.x, point.y, radius, 0, Math.PI * 2);
         ctx.fill();
-        if (isFocus || node.path === this.selected) {
+        if (isFocus || node.path === this.selected || this.selectedNodes.has(node.path)) {
           ctx.strokeStyle = focusedFill;
           ctx.globalAlpha = alpha;
           ctx.lineWidth = 1;
@@ -2373,16 +2501,37 @@ var BrainOSGraphView = class extends import_obsidian6.FileView {
     }
     for (const key of this.rendererOpacity.keys()) if (!alive.has(key)) this.rendererOpacity.delete(key);
     ctx.globalAlpha = 1;
-    if (fading && this.rendererFrame === void 0) this.rendererFrame = requestAnimationFrame(() => {
-      this.rendererFrame = void 0;
-      if (!this.closed) this.draw();
-    });
+    if (((_f = this.gesture) == null ? void 0 : _f.kind) === "box" && this.gesture.moved) {
+      const { start, end } = this.gesture;
+      ctx.fillStyle = accent;
+      ctx.globalAlpha = 0.12;
+      ctx.fillRect(Math.min(start.x, end.x), Math.min(start.y, end.y), Math.abs(end.x - start.x), Math.abs(end.y - start.y));
+      ctx.strokeStyle = accent;
+      ctx.globalAlpha = 0.9;
+      ctx.lineWidth = 1;
+      ctx.setLineDash([4, 3]);
+      ctx.strokeRect(Math.min(start.x, end.x), Math.min(start.y, end.y), Math.abs(end.x - start.x), Math.abs(end.y - start.y));
+      ctx.setLineDash([]);
+      ctx.globalAlpha = 1;
+    }
+    if ((fading || flowing) && this.rendererFrame === void 0 && width > 0 && height > 0) {
+      const animate = (time) => {
+        this.rendererFrame = void 0;
+        if (this.closed) return;
+        if (time - this.rendererLastDraw < 32) {
+          this.rendererFrame = requestAnimationFrame(animate);
+          return;
+        }
+        this.draw();
+      };
+      this.rendererFrame = requestAnimationFrame(animate);
+    }
     let empty = this.contentEl.querySelector(".brainos-graph-empty");
     if (!this.nodes.length && !empty) empty = this.contentEl.createDiv({ cls: "brainos-graph-empty", text: "\u53CC\u51FB\u7A7A\u767D\uFF0C\u5199\u4E0B\u7B2C\u4E00\u4E2A\u60F3\u6CD5" });
     if (this.nodes.length) empty == null ? void 0 : empty.remove();
     const selected = this.nodes.find((node) => node.path === this.selected);
     this.positionDraftEditor();
-    this.status.setText(this.draftNode ? "\u8F93\u5165\u8282\u70B9\u6807\u9898 \xB7 Enter \u786E\u8BA4 \xB7 Tab \u786E\u8BA4\u5E76\u5EF6\u4F38 \xB7 Esc \u53D6\u6D88" : selected ? `${selected.label}${this.file && selected.ownerPath && selected.ownerPath !== this.file.path ? ` \xB7 \u5F15\u7528\u81EA ${(_f = selected.ownerPath.split("/").pop()) == null ? void 0 : _f.replace(/\.md$/, "")}` : ""} \xB7 Tab \u7EE7\u7EED \xB7 Enter \u540C\u8D77\u70B9\u5206\u652F \xB7 \u7A7A\u683C\u7F16\u8F91\u6807\u9898` : `${this.nodes.length} \u4E2A\u8282\u70B9 \xB7 ${this.edges.length} \u6761\u8FDE\u7EBF`);
+    this.status.setText(this.draftNode ? "\u8F93\u5165\u8282\u70B9\u6807\u9898 \xB7 Enter \u786E\u8BA4 \xB7 Tab \u786E\u8BA4\u5E76\u5EF6\u4F38 \xB7 Esc \u53D6\u6D88" : this.selectedNodes.size > 1 ? `\u5DF2\u6846\u9009 ${this.selectedNodes.size} \u4E2A\u8282\u70B9 \xB7 \u9000\u683C\u952E\u6279\u91CF\u5220\u9664 \xB7 Esc \u53D6\u6D88` : selected ? `${selected.label}${this.file && selected.ownerPath && selected.ownerPath !== this.file.path ? ` \xB7 \u5F15\u7528\u81EA ${(_g = selected.ownerPath.split("/").pop()) == null ? void 0 : _g.replace(/\.md$/, "")}` : ""} \xB7 Tab \u7EE7\u7EED \xB7 Enter \u540C\u8D77\u70B9\u5206\u652F \xB7 \u7A7A\u683C\u7F16\u8F91\u6807\u9898` : `${this.nodes.length} \u4E2A\u8282\u70B9 \xB7 ${this.edges.length} \u6761\u8FDE\u7EBF`);
   }
   onPointerDown(event) {
     if (event.pointerType === "touch") this.touchPoints.set(event.pointerId, event);
@@ -2390,19 +2539,25 @@ var BrainOSGraphView = class extends import_obsidian6.FileView {
       this.beginTouchPan();
       return;
     }
-    if (event.button !== 0 || this.editor || this.busy) return;
+    if (event.button !== 0 && event.button !== 2 || this.editor || this.busy) return;
+    this.suppressContextMenu = false;
+    this.clearEdgeHover();
     this.canvas.focus();
     const rect = this.canvas.getBoundingClientRect(), point = { x: event.clientX - rect.left, y: event.clientY - rect.top };
     const node = this.nodeAt(point.x, point.y);
     const base = { pointer: event.pointerId, start: point, last: point, moved: false };
-    if (node) {
-      this.selected = node.path;
-      const world = this.screenToWorld(point.x, point.y);
-      this.gesture = event.altKey && !node.placeholder ? { ...base, kind: "link", node, end: point } : { ...base, kind: "node", node, offset: { x: node.x - world.x, y: node.y - world.y } };
-      if (this.gesture.kind === "node") this.forceLayout.pin(node.path, { x: node.x, y: node.y });
+    if (event.button === 2 || event.pointerType === "touch" && !node) {
+      this.gesture = { ...base, kind: "pan", right: event.button === 2 };
     } else {
-      this.selected = void 0;
-      this.gesture = { ...base, kind: "pan" };
+      this.selectedNodes.clear();
+      this.selected = node == null ? void 0 : node.path;
+      this.hovered = void 0;
+      if (node && event.altKey && !node.placeholder) this.gesture = { ...base, kind: "link", node, end: point };
+      else if (node) {
+        const world = this.screenToWorld(point.x, point.y);
+        this.gesture = { ...base, kind: "node", node, offset: { x: node.x - world.x, y: node.y - world.y } };
+        this.forceLayout.pin(node.path, { x: node.x, y: node.y });
+      } else this.gesture = { ...base, kind: "box", end: point, edge: node ? void 0 : this.edgeAt(point.x, point.y) };
     }
     this.forceLayout.setSelected(this.selected);
     this.startLayoutAnimation();
@@ -2422,8 +2577,12 @@ var BrainOSGraphView = class extends import_obsidian6.FileView {
     const rect = this.canvas.getBoundingClientRect(), point = { x: event.clientX - rect.left, y: event.clientY - rect.top };
     if (!this.gesture) {
       const nextHover = (_a = this.nodeAt(point.x, point.y)) == null ? void 0 : _a.path;
-      if (nextHover !== this.hovered) {
+      const nextEdge = !nextHover && !this.editor && !this.busy ? this.edgeAt(point.x, point.y) : void 0;
+      if (nextHover !== this.hovered || nextEdge !== this.hoveredEdge) {
         this.hovered = nextHover;
+        this.hoveredEdge = nextEdge;
+        if (nextEdge) this.canvas.addClass("is-edge-hovered");
+        else this.canvas.removeClass("is-edge-hovered");
         this.draw();
       }
       return;
@@ -2432,8 +2591,18 @@ var BrainOSGraphView = class extends import_obsidian6.FileView {
     if (event.pointerId !== gesture.pointer) return;
     if (Math.hypot(point.x - gesture.start.x, point.y - gesture.start.y) > 4) gesture.moved = true;
     if (!gesture.moved) return;
-    this.canvas.addClass("is-dragging");
-    if (gesture.kind === "node") {
+    this.canvas.addClass(gesture.kind === "box" ? "is-selecting" : "is-dragging");
+    if (gesture.kind === "box") {
+      gesture.end = point;
+      const left = Math.min(gesture.start.x, point.x), right = Math.max(gesture.start.x, point.x);
+      const top = Math.min(gesture.start.y, point.y), bottom = Math.max(gesture.start.y, point.y);
+      this.selectedNodes = new Set(this.nodes.filter((node) => {
+        const p = this.worldToScreen(node);
+        return !node.placeholder && p.x >= left && p.x <= right && p.y >= top && p.y <= bottom;
+      }).map((node) => node.path));
+      this.selected = this.selectedNodes.size === 1 ? [...this.selectedNodes][0] : void 0;
+      this.forceLayout.setSelected(this.selected);
+    } else if (gesture.kind === "node") {
       const world = this.screenToWorld(point.x, point.y);
       gesture.node.x = world.x + gesture.offset.x;
       gesture.node.y = world.y + gesture.offset.y;
@@ -2458,7 +2627,18 @@ var BrainOSGraphView = class extends import_obsidian6.FileView {
     const gesture = this.gesture;
     if (!gesture || event.pointerId !== gesture.pointer) return;
     this.cancelGesture();
-    if (!gesture.moved) return;
+    if (gesture.kind === "pan" && gesture.right) {
+      this.suppressContextMenu = true;
+      if (!gesture.moved) this.showContextMenu(event);
+      return;
+    }
+    if (!gesture.moved) {
+      if (gesture.kind === "box") {
+        const edge = gesture.edge;
+        if (edge && this.edges.includes(edge)) void this.disconnectEdge(edge);
+      }
+      return;
+    }
     if (gesture.kind === "node") {
       this.forceLayout.unpin(gesture.node.path);
       this.scheduleLayoutSave();
@@ -2470,20 +2650,26 @@ var BrainOSGraphView = class extends import_obsidian6.FileView {
     }
   }
   cancelGesture() {
-    var _a, _b;
+    var _a, _b, _c;
     const gesture = this.gesture;
     if ((gesture == null ? void 0 : gesture.kind) === "node") this.forceLayout.unpin(gesture.node.path);
     const pointer = (_a = this.gesture) == null ? void 0 : _a.pointer;
     this.gesture = void 0;
     if (pointer !== void 0 && this.canvas.hasPointerCapture(pointer)) this.canvas.releasePointerCapture(pointer);
     (_b = this.canvas) == null ? void 0 : _b.removeClass("is-dragging");
+    (_c = this.canvas) == null ? void 0 : _c.removeClass("is-selecting");
     if (!this.closed) this.draw();
   }
   onPointerCancel(event) {
-    var _a;
+    var _a, _b;
+    if (((_a = this.gesture) == null ? void 0 : _a.kind) === "box") {
+      this.selectedNodes.clear();
+      this.selected = void 0;
+      this.forceLayout.setSelected(void 0);
+    }
     if (event.pointerType === "touch") this.touchPoints.delete(event.pointerId);
     this.touchPan = void 0;
-    (_a = this.canvas) == null ? void 0 : _a.classList.remove("is-touch-panning");
+    (_b = this.canvas) == null ? void 0 : _b.classList.remove("is-touch-panning");
     this.cancelGesture();
   }
   beginTouchPan() {
@@ -2554,6 +2740,12 @@ var BrainOSGraphView = class extends import_obsidian6.FileView {
     else void this.beginCreate(this.screenToWorld(x, y));
   }
   onKeyDown(event) {
+    if ((event.metaKey || event.ctrlKey) && !event.altKey && !event.isComposing && event.key.toLowerCase() === "z" && !this.editor) {
+      event.preventDefault();
+      event.stopPropagation();
+      if (!event.repeat && !this.busy) void this.undoGraphEdit(event.shiftKey);
+      return;
+    }
     if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "f" && !this.editor) {
       event.preventDefault();
       this.toggleSearch(true);
@@ -2573,6 +2765,12 @@ var BrainOSGraphView = class extends import_obsidian6.FileView {
       this.fitToView();
       return;
     }
+    if ((event.key === "Backspace" || event.key === "Delete") && this.selectedNodes.size) {
+      event.preventDefault();
+      event.stopPropagation();
+      if (!event.repeat) void this.deleteSelectedNodes();
+      return;
+    }
     const node = this.nodes.find((item) => item.path === this.selected);
     if (event.key === "Tab" || event.key === "Enter") {
       event.preventDefault();
@@ -2585,6 +2783,7 @@ var BrainOSGraphView = class extends import_obsidian6.FileView {
       event.stopPropagation();
       if (!event.repeat) this.removeNode(node, event.key !== "Backspace");
     } else if (event.key === "Escape") {
+      this.selectedNodes.clear();
       this.selected = void 0;
       this.forceLayout.setSelected(void 0);
       this.draw();
@@ -2655,6 +2854,7 @@ var BrainOSGraphView = class extends import_obsidian6.FileView {
       return;
     }
     this.closeEditor();
+    this.selectedNodes.clear();
     const draft = { path: `draft:${crypto.randomUUID()}`, label: "", openPath: "", degree: parent ? 1 : 0, thoughts: target ? [target] : [], kind: "note", ...point };
     this.draftNode = draft;
     this.draftParent = parent;
@@ -2771,6 +2971,7 @@ var BrainOSGraphView = class extends import_obsidian6.FileView {
       const original = await readThoughtNode(this.app, node.path);
       if (this.closed) return;
       this.closeEditor();
+      this.selectedNodes.clear();
       this.editingNode = node;
       this.selected = node.path;
       this.hovered = node.path;
@@ -2885,6 +3086,7 @@ var BrainOSGraphView = class extends import_obsidian6.FileView {
       new NodeReferenceModal(this.app, [...byKey.values()], (node) => {
         void this.runEdit(async () => {
           await referenceThoughtNode(this.app, thought, node, parent);
+          this.selectedNodes.clear();
           this.selected = node.path;
           this.plugin.recordSessionStep(node.path, thought);
           await this.refresh();
@@ -2900,6 +3102,7 @@ var BrainOSGraphView = class extends import_obsidian6.FileView {
   }
   closeEditor() {
     var _a, _b, _c;
+    this.clearEdgeHover();
     (_a = this.titleSuggest) == null ? void 0 : _a.dispose();
     this.titleSuggest = void 0;
     this.editingNode = void 0;
@@ -2919,11 +3122,49 @@ var BrainOSGraphView = class extends import_obsidian6.FileView {
     this.composing = false;
     if (!this.closed) (_c = this.canvas) == null ? void 0 : _c.focus();
   }
+  async undoGraphEdit(redo = false) {
+    if (this.busy) return;
+    this.busy = true;
+    try {
+      const history = graphHistory(this.app);
+      if (await (redo ? history.redo() : history.undo())) {
+        this.closeEditor();
+        await this.refresh();
+        this.plugin.refreshViews();
+        this.canvas.focus();
+      }
+    } catch (error) {
+      new import_obsidian6.Notice(error instanceof Error ? error.message : String(error));
+    } finally {
+      this.busy = false;
+    }
+  }
   async runEdit(action) {
     if (this.busy) return;
     this.busy = true;
     try {
-      await action();
+      await graphHistory(this.app).record(action, {
+        capture: () => ({
+          positions: JSON.parse(JSON.stringify(this.plugin.layout.positions)),
+          steps: this.plugin.layout.sessions.map((session) => [...session.stepKeys]),
+          selected: this.selected,
+          selectedNodes: [...this.selectedNodes]
+        }),
+        restore: async (value, previous) => {
+          for (const key of /* @__PURE__ */ new Set([...Object.keys(value.positions), ...Object.keys(previous.positions)])) {
+            if (JSON.stringify(value.positions[key]) === JSON.stringify(previous.positions[key])) continue;
+            if (value.positions[key]) this.plugin.layout.positions[key] = { ...value.positions[key] };
+            else delete this.plugin.layout.positions[key];
+          }
+          value.steps.forEach((steps, index) => {
+            const session = this.plugin.layout.sessions[index];
+            if (session && JSON.stringify(steps) !== JSON.stringify(previous.steps[index])) session.stepKeys = [...steps];
+          });
+          this.selected = value.selected;
+          this.selectedNodes = new Set(value.selectedNodes);
+          await this.plugin.saveLayout();
+        }
+      });
     } catch (error) {
       new import_obsidian6.Notice(error instanceof Error ? error.message : String(error));
     } finally {
@@ -2943,6 +3184,32 @@ var BrainOSGraphView = class extends import_obsidian6.FileView {
       const session = this.plugin.activeSession;
       if ((session == null ? void 0 : session.stepKeys[session.stepKeys.length - 1]) !== from.path) this.plugin.recordSessionStep(from.path, thought);
       this.plugin.recordSessionStep(to.path, thought);
+      await this.refresh();
+      this.plugin.refreshViews();
+    });
+  }
+  async deleteSelectedNodes() {
+    var _a, _b;
+    if (this.busy || !this.selectedNodes.size) return;
+    const selected = [...this.selectedNodes];
+    if (this.source === "vault") {
+      this.plugin.layout.graph.hiddenPaths = [.../* @__PURE__ */ new Set([...this.plugin.layout.graph.hiddenPaths, ...selected])];
+      this.selectedNodes.clear();
+      this.selected = void 0;
+      await this.plugin.saveLayout();
+      this.filterSnapshot();
+      this.draw();
+      return;
+    }
+    const thought = (_b = (_a = this.file) == null ? void 0 : _a.path) != null ? _b : this.thoughtPath;
+    if (!thought) {
+      new import_obsidian6.Notice("\u8BF7\u5148\u9009\u62E9\u8981\u4FEE\u6539\u7684\u601D\u8003\u6587\u4EF6");
+      return;
+    }
+    await this.runEdit(async () => {
+      await removeThoughtNodes(this.app, thought, selected);
+      this.selectedNodes.clear();
+      this.selected = void 0;
       await this.refresh();
       this.plugin.refreshViews();
     });
@@ -2970,12 +3237,62 @@ var BrainOSGraphView = class extends import_obsidian6.FileView {
     if (confirm) new RemoveNodeModal(this.app, node.label, owned, remove).open();
     else void remove();
   }
+  edgeAt(x, y) {
+    const byPath = new Map(this.nodes.map((node) => [node.path, node]));
+    let closest, distance = 8 + this.graphOptions.lineSizeMultiplier / 2;
+    for (const edge of this.edges) {
+      const a = byPath.get(edge.from), b = byPath.get(edge.to);
+      if (!a || !b) continue;
+      const p = this.worldToScreen(a), q = this.worldToScreen(b), dx = q.x - p.x, dy = q.y - p.y;
+      const length = dx * dx + dy * dy;
+      if (!Number.isFinite(length) || length < 1e-3) continue;
+      const t = Math.max(0, Math.min(1, ((x - p.x) * dx + (y - p.y) * dy) / length));
+      const next = Math.hypot(x - p.x - t * dx, y - p.y - t * dy);
+      if (next < distance) {
+        distance = next;
+        closest = edge;
+      }
+    }
+    return closest;
+  }
+  clearEdgeHover() {
+    var _a;
+    this.hoveredEdge = void 0;
+    (_a = this.canvas) == null ? void 0 : _a.removeClass("is-edge-hovered");
+  }
+  async disconnectEdge(edge) {
+    var _a;
+    if (this.busy) return;
+    const thought = ((_a = this.file) == null ? void 0 : _a.path) || this.thoughtPath || (edge.thoughts.length === 1 ? edge.thoughts[0] : void 0);
+    if (this.source !== "vault" && !thought) {
+      new import_obsidian6.Notice("\u8FDE\u7EBF\u5C5E\u4E8E\u591A\u4E2A\u601D\u8003\uFF0C\u8BF7\u5148\u9009\u62E9\u8981\u4FEE\u6539\u7684\u601D\u8003");
+      return;
+    }
+    await this.runEdit(async () => {
+      if (this.source === "vault") {
+        const directions = this.edges.filter((value) => edgeStrokeKey(value.from, value.to) === edgeStrokeKey(edge.from, edge.to));
+        for (const direction2 of directions) await removeVaultLink(this.app, direction2.from, direction2.to);
+      } else await unlinkThoughtNodes(this.app, thought, edge.from, edge.to, true);
+      this.clearEdgeHover();
+      await this.refresh();
+      this.plugin.refreshViews();
+      this.canvas.focus();
+    });
+  }
   onContextMenu(event) {
+    var _a;
+    event.preventDefault();
+    if (((_a = this.gesture) == null ? void 0 : _a.kind) === "pan" && this.gesture.right || this.suppressContextMenu && event.button === 2) return;
+    this.showContextMenu(event);
+  }
+  showContextMenu(event) {
     event.preventDefault();
     if (this.editor || this.busy) return;
+    this.clearEdgeHover();
     const rect = this.canvas.getBoundingClientRect(), x = event.clientX - rect.left, y = event.clientY - rect.top;
     const node = this.nodeAt(x, y), menu = new import_obsidian6.Menu();
     if (node) {
+      this.selectedNodes.clear();
       this.selected = node.path;
       this.forceLayout.setSelected(this.selected);
       this.startLayoutAnimation();
@@ -2991,34 +3308,8 @@ var BrainOSGraphView = class extends import_obsidian6.FileView {
       });
     } else {
       menu.addItem((item) => item.setTitle("\u5728\u8FD9\u91CC\u65B0\u5EFA\u72EC\u7ACB\u60F3\u6CD5").setIcon("plus").onClick(() => void this.beginCreate(this.screenToWorld(x, y))));
-      const byPath = new Map(this.nodes.map((item) => [item.path, item]));
-      const edge = this.edges.find((item) => {
-        const a = byPath.get(item.from), b = byPath.get(item.to);
-        if (!a || !b) return false;
-        const p = this.worldToScreen(a), q = this.worldToScreen(b), dx = q.x - p.x, dy = q.y - p.y;
-        const t = Math.max(0, Math.min(1, ((x - p.x) * dx + (y - p.y) * dy) / (dx * dx + dy * dy || 1)));
-        return Math.hypot(x - p.x - t * dx, y - p.y - t * dy) < 7;
-      });
-      if (edge) menu.addItem((item) => item.setTitle("\u65AD\u5F00\u6B64\u8FDE\u7EBF").setIcon("unlink").onClick(() => {
-        if (this.source === "vault") {
-          void this.runEdit(async () => {
-            await removeVaultLink(this.app, edge.from, edge.to);
-            await this.refresh();
-            this.plugin.refreshViews();
-          });
-          return;
-        }
-        const thought = this.thoughtPath || (edge.thoughts.length === 1 ? edge.thoughts[0] : void 0);
-        if (!thought) {
-          new import_obsidian6.Notice("\u8FDE\u7EBF\u5C5E\u4E8E\u591A\u4E2A\u601D\u8003\uFF0C\u8BF7\u5148\u9009\u62E9\u8981\u4FEE\u6539\u7684\u601D\u8003");
-          return;
-        }
-        void this.runEdit(async () => {
-          await unlinkThoughtNodes(this.app, thought, edge.from, edge.to);
-          await this.refresh();
-          this.plugin.refreshViews();
-        });
-      }));
+      const edge = this.edgeAt(x, y);
+      if (edge) menu.addItem((item) => item.setTitle("\u65AD\u5F00\u6B64\u8FDE\u7EBF").setIcon("unlink").onClick(() => void this.disconnectEdge(edge)));
     }
     menu.showAtMouseEvent(event);
   }

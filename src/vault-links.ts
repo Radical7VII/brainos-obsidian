@@ -1,3 +1,4 @@
+import { processGraphFile } from "./graph-history";
 import { App, parseLinktext, TFile } from "obsidian";
 
 export async function appendVaultLink(app: App, from: string, to: string) {
@@ -6,7 +7,7 @@ export async function appendVaultLink(app: App, from: string, to: string) {
   if (!(source instanceof TFile) || source.extension !== "md" || !(target instanceof TFile)) throw new Error("请在已有 Markdown 笔记之间建立链接");
   if (source.path === target.path) return;
   const link = app.fileManager.generateMarkdownLink(target, source.path);
-  await app.vault.process(source, current => {
+  await processGraphFile(app, source, current => {
     if (app.metadataCache.resolvedLinks[source.path]?.[target.path] || current.includes(link)) return current;
     return current + (current.endsWith("\n") ? "\n" : "\n\n") + link + "\n";
   });
@@ -23,7 +24,7 @@ export async function removeVaultLink(app: App, from: string, to: string) {
     return target?.path === to || `unresolved:${parsed.path}` === to;
   }).sort((a, b) => b.position.start.offset - a.position.start.offset);
   if (!references.length) throw new Error("该连线可能来自属性或索引尚未更新，请打开来源笔记修改");
-  await app.vault.process(source, current => {
+  await processGraphFile(app, source, current => {
     let next = current;
     for (const reference of references) {
       const start = reference.position.start.offset, end = reference.position.end.offset;

@@ -5,7 +5,7 @@ import {build} from 'esbuild';
 class Element {
   constructor(tag='div',options={}) {
     this.tag=tag;this.children=[];this.style={};this.value=options.value??'';
-    this.text=options.text??'';this.options=options;this.clientWidth=900;this.clientHeight=600;
+    this.text=options.text??'';this.options=options;this.clientWidth=900;this.clientHeight=600;this.offsetLeft=0;this.offsetTop=0;
   }
   createEl(tag,options){const child=new Element(tag,options);this.children.push(child);return child;}
   createDiv(options){return this.createEl('div',options);}
@@ -16,6 +16,10 @@ class Element {
   select(){this.selectionStart=0;this.selectionEnd=this.value.length;}
   empty(){this.children=[];}
   addClass(){}
+  removeClass(){}
+  getBoundingClientRect(){return {left:0,top:0};}
+  setPointerCapture(){}
+  hasPointerCapture(){return false;}
   requestSubmit(){this.onsubmit?.({preventDefault(){}});}
   find(tag){return this.children.flatMap(child=>[child,...child.find(tag)]).filter(child=>child.tag===tag);}
 }
@@ -28,20 +32,20 @@ const bundle=await build({
     b.onResolve({filter:/^\.\/graph-layout$/},()=>({path:'layout',namespace:'mock'}));
     b.onResolve({filter:/^obsidian$/},()=>({path:'obsidian',namespace:'mock'}));
     b.onLoad({filter:/.*/,namespace:'mock'},args=>({loader:'js',contents:args.path==='layout'?
-      'export class GraphLayout {sync(){}pin(){}unpin(){}setSelected(){}configure(){}dispose(){}}':
+      'export class GraphLayout {sync(){}pin(){}movePinned(){}unpin(){}setSelected(){}configure(){}dispose(){}}':
       'export class TFile{constructor(path){this.path=path;this.extension="md";this.basename=path.replace(/.*\\//,"").slice(0,-3);}};export const normalizePath=p=>p.replace(/\\/+/g,"/");export class FileView{constructor(leaf){this.leaf=leaf;this.app=leaf.app;this.contentEl=leaf.element;}};export class Notice{constructor(text){globalThis.lastNotice=text;}};export class AbstractInputSuggest{       constructor(app,input){this.input=input;let revision=0;input.addEventListener("input",async()=>{const current=++revision;const rows=await this.getSuggestions(input.value);if(current!==revision)return;this.rendered=rows;if(rows.length)this.open();else this.close();});}       setValue(value){this.input.value=value;}open(){}close(){}     };export const prepareFuzzySearch=query=>text=>text.toLowerCase().includes(query.toLowerCase())?{score:1}:null;export class Modal{};export class SuggestModal{};export class Component{};export class MarkdownView{};export class Menu{};export class Setting{};export const MarkdownRenderer={};export const parseLinktext=p=>({path:p,subpath:""});export const getAllTags=()=>[];export const setIcon=()=>{};'}));
   }}],
 });
 const {BrainOSGraphView,defaultGraphOptions,buildThoughtSnapshot,nodeKey,titleID,TFile}=await import('data:text/javascript;base64,'+Buffer.from(bundle.outputFiles[0].text).toString('base64'));
 async function fixture(text,path='思考.md'){
   const file=new TFile(path),files=new Map([[file.path,file]]),content=new Map([[file.path,text]]);
-  const app={vault:{getAbstractFileByPath:path=>files.get(path),getMarkdownFiles:()=>[...files.values()],cachedRead:async f=>content.get(f.path),
+  const app={vault:{getAbstractFileByPath:path=>files.get(path),getMarkdownFiles:()=>[...files.values()],cachedRead:async f=>content.get(f.path),read:async f=>content.get(f.path),
     process:async(f,edit)=>content.set(f.path,edit(content.get(f.path)))},
     metadataCache:{getFileCache:()=>({}),getFirstLinkpathDest:(path,owner)=>files.get(path||owner)}};
   const session={stepKeys:[]},plugin={layout:{positions:{},viewports:{},settings:{noteFolder:''},graph:defaultGraphOptions(),sessions:[session]},
     activeSession:session,recordSessionStep:key=>session.stepKeys.push(key),saveLayout:async()=>{},refreshViews(){}};
   const element=new Element(),view=new BrainOSGraphView({app,element},plugin);view.file=file;view.thoughtPath=file.path;
-  view.canvas=new Element('canvas');view.startLayoutAnimation=()=>{};view.draw=()=>{};view.positionDraftEditor=()=>{};
+  view.canvas=new Element('canvas');view.startLayoutAnimation=()=>{};view.draw=()=>{};view.positionDraftEditor=()=>{};view.scheduleLayoutSave=()=>{};
   view.refresh=async()=>{view.snapshot=await buildThoughtSnapshot(app,file);view.filterSnapshot();};
   view.addMarkdownPreviewToggle=()=>{};
   await view.refresh();
@@ -307,4 +311,157 @@ test('node candidate search only offers nodes under the configured thought direc
   await f.view.beginCreate({x:0,y:0});const options=await f.view.titleSuggest.getSuggestions('网络');
   assert.deepEqual(options.map(option=>option.node.label),['网络服']);
   assert.ok(reads.every(path=>path.startsWith('BrainOS/')));
+});
+
+function placeEdgeNodes(f){
+  for(const [label,x,y] of [['A',-100,0],['B',100,0],['C',100,150]]){
+    const node=f.view.nodes.find(node=>node.label===label);if(node){node.x=x;node.y=y;}
+  }
+}
+function pointerAt(x,y){return {button:0,pointerId:1,pointerType:'mouse',clientX:x,clientY:y,preventDefault(){}};}
+test('hover highlights a line without editing and a single click disconnects it',async()=>{
+  const f=await fixture('- A\n  A正文\n- B\n  B正文\n- C\n');placeEdgeNodes(f);
+  const original=f.content.get(f.file.path),event=pointerAt(450,302);
+  f.view.onPointerMove(event);
+  assert.equal(f.view.hoveredEdge.from,f.key('A'));assert.equal(f.view.hoveredEdge.to,f.key('B'));
+  assert.equal(f.content.get(f.file.path),original);
+  f.view.onPointerDown(event);f.view.onPointerUp(event);await settle(f.view);
+  assert.equal(f.view.hoveredEdge,undefined);
+  assert.deepEqual(f.view.nodes.map(node=>node.label).sort(),['A','B','C']);
+  assert.match(f.content.get(f.file.path),/A正文/);assert.match(f.content.get(f.file.path),/B正文/);
+  assert.ok(!f.view.edges.some(edge=>edge.from===f.key('A')&&edge.to===f.key('B')));
+  assert.ok(f.view.edges.some(edge=>edge.from===f.key('B')&&edge.to===f.key('C')));
+});
+test('moving away clears line hover and clicking a node never disconnects its links',async()=>{
+  const original='- A\n- B\n',f=await fixture(original);placeEdgeNodes(f);
+  f.view.onPointerMove(pointerAt(450,302));assert.ok(f.view.hoveredEdge);
+  f.view.onPointerMove(pointerAt(450,200));assert.equal(f.view.hoveredEdge,undefined);
+  f.view.onPointerMove(pointerAt(450,302));
+  f.view.onPointerMove(pointerAt(350,300));assert.equal(f.view.hoveredEdge,undefined);assert.equal(f.view.hovered,f.key('A'));
+  f.view.onPointerDown(pointerAt(350,300));f.view.onPointerUp(pointerAt(350,300));await settle(f.view);
+  assert.equal(f.view.selected,f.key('A'));assert.equal(f.content.get(f.file.path),original);
+});
+test('single click disconnects both visual directions while keeping nodes and prose',async()=>{
+  const f=await fixture('- A\n  第一次\n- B\n  中间\n- A\n  第二次\n');placeEdgeNodes(f);
+  const event=pointerAt(450,302);f.view.onPointerDown(event);f.view.onPointerUp(event);await settle(f.view);
+  assert.equal(f.view.edges.length,0);assert.deepEqual(f.view.nodes.map(node=>node.label).sort(),['A','B']);
+  for(const body of ['第一次','中间','第二次'])assert.ok(f.content.get(f.file.path).includes(body));
+});
+test('dragging or clicking blank canvas never disconnects a line',async()=>{
+  const f=await fixture('- A\n- B\n');placeEdgeNodes(f);const original=f.content.get(f.file.path);
+  const event=pointerAt(450,302);f.view.onPointerDown(event);f.view.gesture.moved=true;
+  f.view.onPointerUp(event);await settle(f.view);assert.equal(f.content.get(f.file.path),original);
+  f.view.onPointerDown(pointerAt(450,200));f.view.onPointerUp(pointerAt(450,200));await settle(f.view);
+  assert.equal(f.content.get(f.file.path),original);
+});
+
+test('Command Z restores disconnected lines and Command Shift Z repeats the disconnect',async()=>{
+  const original='- A\n  第一次\n- B\n  B正文\n- A\n  第二次\n',f=await fixture(original);placeEdgeNodes(f);
+  const event=pointerAt(450,302);f.view.onPointerDown(event);f.view.onPointerUp(event);await settle(f.view);
+  const disconnected=f.content.get(f.file.path);assert.equal(f.view.edges.length,0);
+  const undo=keyEvent('z',{metaKey:true});f.view.onKeyDown(undo);await settle(f.view);
+  assert.equal(undo.prevented,true);assert.equal(undo.stopped,true);
+  assert.equal(f.content.get(f.file.path),original);assert.equal(f.view.edges.length,2);
+  f.view.onKeyDown(keyEvent('Z',{metaKey:true,shiftKey:true}));await settle(f.view);
+  assert.equal(f.content.get(f.file.path),disconnected);assert.equal(f.view.edges.length,0);
+});
+test('undo restores deleted nodes and a new edit invalidates redo',async()=>{
+  const original='- A\n- B\n  正文\n',f=await fixture(original);f.view.selected=f.key('B');
+  f.view.onKeyDown(keyEvent('Backspace'));await settle(f.view);assert.ok(!f.view.nodes.some(node=>node.label==='B'));
+  f.view.onKeyDown(keyEvent('z',{ctrlKey:true}));await settle(f.view);assert.equal(f.content.get(f.file.path),original);
+  await f.view.beginCreate({x:0,y:0});f.view.editor.find('input')[0].value='C';f.view.editor.requestSubmit();await settle(f.view);
+  const fresh=f.content.get(f.file.path);f.view.onKeyDown(keyEvent('z',{ctrlKey:true,shiftKey:true}));await settle(f.view);
+  assert.equal(f.content.get(f.file.path),fresh);assert.ok(f.view.nodes.some(node=>node.label==='B'));
+});
+test('undo and redo rename source and incoming references together and restore node positions',async()=>{
+  const original='- [[来源.md|原名]]\n  引用正文\n',source='- 原名\n  来源正文  \n',f=await fixture(original);
+  f.addFile('来源.md',source);await f.view.refresh();const oldKey=nodeKey('来源.md',titleID('原名')),newKey=nodeKey('来源.md',titleID('改名'));
+  f.plugin.layout.positions[oldKey]={x:42,y:64};f.view.selected=oldKey;f.session.stepKeys=[oldKey];
+  await f.view.beginEdit(f.view.nodes.find(node=>node.label==='原名'));f.view.editor.find('input')[0].value='改名';f.view.editor.requestSubmit();await settle(f.view);
+  assert.ok(f.content.get(f.file.path).includes('改名'));assert.deepEqual(f.session.stepKeys,[newKey]);
+  f.view.onKeyDown(keyEvent('z',{metaKey:true}));await settle(f.view);
+  assert.equal(f.content.get(f.file.path),original);assert.equal(f.content.get('来源.md'),source);
+  assert.deepEqual(f.plugin.layout.positions[oldKey],{x:42,y:64});assert.equal(f.plugin.layout.positions[newKey],undefined);assert.deepEqual(f.session.stepKeys,[oldKey]);
+  f.view.onKeyDown(keyEvent('Z',{metaKey:true,shiftKey:true}));await settle(f.view);
+  assert.equal(f.content.get('来源.md'),source.replace('原名','改名'));assert.ok(f.content.get(f.file.path).includes('改名'));
+  assert.deepEqual(f.plugin.layout.positions[newKey],{x:42,y:64});assert.deepEqual(f.session.stepKeys,[newKey]);
+});
+test('undo refuses external modifications before restoring any file in a multi-file edit',async()=>{
+  const f=await fixture('- [[来源.md|原名]]\n');f.addFile('来源.md','- 原名\n');await f.view.refresh();
+  await f.view.beginEdit(f.view.nodes[0]);f.view.editor.find('input')[0].value='改名';f.view.editor.requestSubmit();await settle(f.view);
+  const changedSource=f.content.get('来源.md');f.content.set(f.file.path,'外部新增内容\n'+f.content.get(f.file.path));
+  const external=f.content.get(f.file.path);f.view.onKeyDown(keyEvent('z',{metaKey:true}));await settle(f.view);
+  assert.equal(f.content.get(f.file.path),external);assert.equal(f.content.get('来源.md'),changedSource);assert.match(globalThis.lastNotice,/其他位置修改/);
+});
+test('a failure partway through multi-file undo rolls back completed restores and retains the undo entry',async()=>{
+  const original='- [[来源.md|原名]]\n',source='- 原名\n',f=await fixture(original);f.addFile('来源.md',source);await f.view.refresh();
+  await f.view.beginEdit(f.view.nodes[0]);f.view.editor.find('input')[0].value='改名';f.view.editor.requestSubmit();await settle(f.view);
+  const after=f.content.get(f.file.path),afterSource=f.content.get('来源.md'),process=f.app.vault.process;let fail=true;
+  f.app.vault.process=async(file,edit)=>{if(file.path===f.file.path&&fail){fail=false;throw new Error('模拟写入失败');}return process(file,edit);};
+  f.view.onKeyDown(keyEvent('z',{metaKey:true}));await settle(f.view);
+  assert.equal(f.content.get(f.file.path),after);assert.equal(f.content.get('来源.md'),afterSource);
+  f.view.onKeyDown(keyEvent('z',{metaKey:true}));await settle(f.view);
+  assert.equal(f.content.get(f.file.path),original);assert.equal(f.content.get('来源.md'),source);
+});
+test('Command Z during title input is left to native text undo',async()=>{
+  const f=await fixture('- A\n');await f.view.beginEdit(f.view.nodes[0]);
+  const form=f.view.editor,event=keyEvent('z',{metaKey:true});form.onkeydown(event);f.view.onKeyDown(event);await settle(f.view);
+  assert.equal(event.prevented,undefined);assert.equal(f.view.editor,form);assert.equal(f.content.get(f.file.path),'- A\n');
+});
+
+test('left drag selects multiple nodes without moving the canvas or disconnecting crossed edges, and batch deletion is one undo',async()=>{
+  const original='- A\n  A正文\n- B\n  B正文\n- C\n',f=await fixture(original);placeEdgeNodes(f);
+  f.view.onPointerDown(pointerAt(300,250));f.view.onPointerMove(pointerAt(600,350));f.view.onPointerUp(pointerAt(600,350));await settle(f.view);
+  assert.deepEqual([...f.view.selectedNodes].sort(),[f.key('A'),f.key('B')].sort());
+  assert.deepEqual(f.view.pan,{x:0,y:0});assert.equal(f.content.get(f.file.path),original);
+  f.view.onKeyDown(keyEvent('Delete'));await settle(f.view);assert.deepEqual(f.view.nodes.map(node=>node.label),['C']);
+  f.view.onKeyDown(keyEvent('z',{metaKey:true}));await settle(f.view);
+  assert.equal(f.content.get(f.file.path),original);assert.equal(f.view.selectedNodes.size,2);
+});
+test('left dragging a node moves it while right dragging pans without opening a menu',async()=>{
+  const f=await fixture('- A\n- B\n- C\n');placeEdgeNodes(f);const a=f.view.nodes.find(node=>node.label==='A');
+  f.view.onPointerDown(pointerAt(350,300));f.view.onPointerMove(pointerAt(600,350));f.view.onPointerUp(pointerAt(600,350));
+  assert.equal(a.x,150);assert.equal(a.y,50);assert.equal(f.view.selected,f.key('A'));assert.equal(f.view.selectedNodes.size,0);
+  let menus=0;f.view.showContextMenu=()=>menus++;
+  const right=(x,y)=>({...pointerAt(x,y),button:2});
+  f.view.onPointerDown(right(450,300));f.view.onPointerMove(right(490,330));f.view.onPointerUp(right(490,330));
+  assert.deepEqual(f.view.pan,{x:40,y:30});assert.equal(menus,0);assert.equal(f.view.selectedNodes.size,0);
+  f.view.onContextMenu(right(490,330));assert.equal(menus,0);
+  f.view.onPointerDown(right(450,300));f.view.onPointerUp(right(450,300));assert.equal(menus,1);
+  f.view.onContextMenu(right(450,300));assert.equal(menus,1);
+});
+test('reverse rectangle selection and Escape work at a changed zoom and pan',async()=>{
+  const f=await fixture('- A\n- B\n- C\n');placeEdgeNodes(f);f.view.zoom=0.5;f.view.pan={x:40,y:20};
+  f.view.onPointerDown(pointerAt(530,340));f.view.onPointerMove(pointerAt(400,280));f.view.onPointerUp(pointerAt(400,280));
+  assert.deepEqual([...f.view.selectedNodes].sort(),[f.key('A'),f.key('B')].sort());
+  f.view.onKeyDown(keyEvent('Escape'));assert.equal(f.view.selectedNodes.size,0);
+  assert.equal(f.content.get(f.file.path),'- A\n- B\n- C\n');
+});
+test('batch removal of references preserves source Markdown',async()=>{
+  const f=await fixture('- A\n- [[来源.md|共享]]\n- C\n');f.addFile('来源.md','- 共享\n  来源正文\n');await f.view.refresh();
+  f.view.selectedNodes=new Set([f.key('A'),nodeKey('来源.md',titleID('共享'))]);
+  f.view.onKeyDown(keyEvent('Backspace'));await settle(f.view);
+  assert.deepEqual(f.view.nodes.map(node=>node.label),['C']);assert.equal(f.content.get('来源.md'),'- 共享\n  来源正文\n');
+  f.view.onKeyDown(keyEvent('z',{metaKey:true}));await settle(f.view);
+  assert.equal(f.content.get(f.file.path),'- A\n- [[来源.md|共享]]\n- C\n');
+});
+test('directed edges render moving dashes with separate reverse lanes and reset dash state',async()=>{
+  const f=await fixture('- A\n- B\n- A\n');placeEdgeNodes(f);
+  const oldWindow=globalThis.window,oldStyle=globalThis.getComputedStyle,oldPerformance=globalThis.performance;
+  let time=1000,dash=[],start,end;const strokes=[];
+  const ctx=new Proxy({setLineDash(value){dash=[...value];},moveTo(x,y){start={x,y};},lineTo(x,y){end={x,y};},stroke(){if(dash[0]===8)strokes.push({start,end,offset:this.lineDashOffset,dash:[...dash]});},measureText(text){return {width:text.length*8};}}, {get(target,key){return key in target?target[key]:()=>{};}});
+  try{
+    globalThis.window={devicePixelRatio:1};globalThis.getComputedStyle=()=>({getPropertyValue:()=> '#888'});
+    Object.defineProperty(globalThis,'performance',{configurable:true,value:{now:()=>time}});
+    f.view.canvas.getContext=()=>ctx;f.view.search=new Element('input');f.view.status={setText(){}};f.view.contentEl.querySelector=()=>null;
+    BrainOSGraphView.prototype.draw.call(f.view);
+    assert.equal(strokes.length,2);assert.deepEqual(strokes[0].dash,[8,6]);
+    assert.equal(Math.sign(strokes[0].end.x-strokes[0].start.x),1);
+    assert.equal(Math.sign(strokes[1].end.x-strokes[1].start.x),-1);
+    assert.notEqual(strokes[0].start.y,strokes[1].start.y);const firstOffset=strokes[0].offset;
+    time=1100;BrainOSGraphView.prototype.draw.call(f.view);assert.notEqual(strokes[2].offset,firstOffset);
+    assert.deepEqual(dash,[]);assert.equal(ctx.lineDashOffset,0);assert.notEqual(f.view.rendererFrame,undefined);
+  }finally{
+    globalThis.window=oldWindow;globalThis.getComputedStyle=oldStyle;Object.defineProperty(globalThis,'performance',{configurable:true,value:oldPerformance});
+  }
 });

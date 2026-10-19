@@ -1,3 +1,4 @@
+import { processGraphFile } from "./graph-history";
 import { App, TFile } from "obsidian";
 import { isThoughtFile } from "./thought-scope";
 import { parseThoughtState, stepKey } from "./thoughts";
@@ -53,7 +54,7 @@ export async function loadThoughtDocument(app: App, file: TFile, folder?: string
 
 async function mutateThought(app: App, filePath: string, edit: (markdown: string, loaded: LoadedThought) => string) {
   const file = requireFile(app, filePath), loaded = await loadThoughtDocument(app, file);
-  await app.vault.process(file, current => {
+  await processGraphFile(app, file, current => {
     if (loaded.legacy && current !== loaded.original) throw new Error("旧思考在转换期间已变化，请刷新后重试");
     if (!loaded.legacy && (LEGACY_STATE.test(current) || convertParagraphThought(current))) throw new Error("思考格式已变化，请刷新后重试");
     const next = edit(loaded.legacy ? loaded.markdown : current, loaded);
@@ -76,7 +77,7 @@ async function migrateIncomingAnchors(app: App, source: string, aliases: Map<str
   };
   for (const file of app.vault.getMarkdownFiles()) {
     const before = await app.vault.cachedRead(file);
-    if (rewrite(before, file.path) !== before) await app.vault.process(file, current => rewrite(current, file.path));
+    if (rewrite(before, file.path) !== before) await processGraphFile(app, file, current => rewrite(current, file.path));
   }
 }
 function findNode(loaded: LoadedThought, id: string) {
@@ -193,7 +194,7 @@ async function renameIncomingReferences(app: App, source: string, oldTitle: stri
   for (const file of app.vault.getMarkdownFiles()) {
     const before = await app.vault.cachedRead(file);
     if (rewrite(before, file.path) === before) continue;
-    await app.vault.process(file, current => rewrite(current, file.path));
+    await processGraphFile(app, file, current => rewrite(current, file.path));
   }
 }
 export async function linkThoughtNodes(app: App, owner: string, from: GraphNode, to: GraphNode) {
@@ -222,22 +223,26 @@ async function referenceKeys(app: App, owner: string) {
   return { entry: (id: string) => entries.get(id) ?? nodeKey(owner, id),
     link: (target: string, label?: string) => links.get(JSON.stringify([target, label])) };
 }
-export async function unlinkThoughtNodes(app: App, owner: string, from: string, to: string) {
+export async function unlinkThoughtNodes(app: App, owner: string, from: string, to: string, bidirectional = false) {
   const keys = await referenceKeys(app, owner);
   await mutateThought(app, owner, text => {
-    let next = removeDocumentRelation(text, (a, b) => keys.entry(a) === from && keys.entry(b) === to);
-    for (const node of parseThoughtDocument(next).nodes.filter(node => keys.entry(node.id) === from)) {
-      next = unlinkDocumentBody(next, node.id, (target, label) => keys.link(target, label) === to);
+    const matches = (a: string | undefined, b: string | undefined) => a === from && b === to || bidirectional && a === to && b === from;
+    let next = removeDocumentRelation(text, (a, b) => matches(keys.entry(a), keys.entry(b)));
+    for (const node of parseThoughtDocument(next).nodes.filter(node => keys.entry(node.id) === from || bidirectional && keys.entry(node.id) === to)) {
+      next = unlinkDocumentBody(next, node.id, (target, label) => matches(keys.entry(node.id), keys.link(target, label)));
     }
     return next;
   });
 }
 export async function removeThoughtNode(app: App, owner: string, key: string) {
-  const keys = await referenceKeys(app, owner);
+  return removeThoughtNodes(app, owner, [key]);
+}
+export async function removeThoughtNodes(app: App, owner: string, selected: string[]) {
+  const keys = await referenceKeys(app, owner), removed = new Set(selected);
   await mutateThought(app, owner, text => {
     let next = text;
-    for (const node of parseThoughtDocument(next).nodes.filter(node => keys.entry(node.id) === key)) next = removeDocumentNode(next, node.id);
-    for (const node of parseThoughtDocument(next).nodes) next = unlinkDocumentBody(next, node.id, (target, label) => keys.link(target, label) === key);
+    for (const node of parseThoughtDocument(next).nodes.filter(node => removed.has(keys.entry(node.id)))) next = removeDocumentNode(next, node.id);
+    for (const node of parseThoughtDocument(next).nodes) next = unlinkDocumentBody(next, node.id, (target, label) => removed.has(keys.link(target, label) ?? ""));
     return next;
   });
 }

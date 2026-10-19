@@ -5,10 +5,11 @@ import { GraphLayout } from "./graph-layout";
 import { defaultGraphOptions, graphForces } from "./graph-options";
 import { buildVaultSnapshot, selectGraph } from "./vault-graph";
 import { removeVaultLink } from "./vault-links";
-import { InsertThoughtTarget, insertThoughtNode, createThoughtNode, editThoughtNode, linkThoughtNodes, readThoughtNode, referenceThoughtNode, removeThoughtNode, unlinkThoughtNodes } from "./thought-store";
+import { InsertThoughtTarget, insertThoughtNode, createThoughtNode, editThoughtNode, linkThoughtNodes, readThoughtNode, referenceThoughtNode, removeThoughtNode, removeThoughtNodes, unlinkThoughtNodes } from "./thought-store";
 import { splitNodeKey } from "./thought-document";
 import { approachOpacity, edgeInViewport, edgeStrokeKey, graphLabelAlpha, intersectsViewport, nodeScreenRadius, wrapGraphLabel } from "./graph-rendering";
 import { NodeTitleCandidate, NodeTitleSuggest } from "./node-title-suggest";
+import { graphHistory } from "./graph-history";
 import { isThoughtFile } from "./thought-scope";
 import { titleKeyAction } from "./node-title-input";
 
@@ -17,7 +18,8 @@ import { VIEW_TYPE } from "./mind-view-mode";
 
 type Gesture = { pointer: number; start: Point; last: Point; moved: boolean } & (
   { kind: "node"; node: GraphNode; offset: Point } |
-  { kind: "pan" } |
+  { kind: "pan"; right?: boolean } |
+  { kind: "box"; end: Point; edge?: GraphEdge } |
   { kind: "link"; node: GraphNode; end: Point }
 );
 
@@ -40,6 +42,9 @@ export class BrainOSGraphView extends FileView {
   private zoom = 1;
   private pan: Point = { x: 0, y: 0 };
   private selected?: string;
+  private selectedNodes = new Set<string>();
+  private suppressContextMenu = false;
+  private hoveredEdge?: GraphEdge;
   private hovered?: string;
   private gesture?: Gesture;
   private editor?: HTMLElement;
@@ -90,7 +95,7 @@ export class BrainOSGraphView extends FileView {
     this.file = file;
     this.thoughtPath = file.path;
     this.localCenter = undefined;
-    this.selected = undefined; this.hovered = undefined;
+    this.selected = undefined; this.selectedNodes.clear(); this.hovered = undefined;
     this.restoreViewport();
     if (this.canvas) await this.refresh();
   }
@@ -135,7 +140,7 @@ export class BrainOSGraphView extends FileView {
     this.registerDomEvent(this.canvas, "pointerdown", event => this.onPointerDown(event));
     this.registerDomEvent(this.canvas, "pointermove", event => this.onPointerMove(event));
     this.registerDomEvent(this.canvas, "pointerup", event => this.onPointerUp(event));
-    this.registerDomEvent(this.canvas, "pointerleave", () => { if (!this.gesture) { this.hovered = undefined; this.draw(); } });
+    this.registerDomEvent(this.canvas, "pointerleave", () => { if (!this.gesture) { this.hovered = undefined; this.clearEdgeHover(); this.draw(); } });
     this.registerDomEvent(this.canvas, "pointercancel", event => this.onPointerCancel(event));
     this.registerDomEvent(this.canvas, "lostpointercapture", event => this.onPointerCancel(event));
     this.registerDomEvent(this.canvas, "wheel", event => this.onWheel(event), { passive: false });
@@ -205,6 +210,7 @@ export class BrainOSGraphView extends FileView {
     const visible = { ...base, nodes: base.nodes.filter(node => !this.plugin.layout.graph.hiddenPaths.includes(node.path)) };
     const result = selectGraph(visible, this.search?.value.trim() ?? "", this.plugin.layout.graph.filter, this.localCenter);
     this.nodes = this.draftNode ? result.nodes.filter(node => !node.placeholder) : result.nodes; this.edges = result.edges;
+    this.selectedNodes = new Set([...this.selectedNodes].filter(path => this.nodes.some(node => node.path === path)));
     if (this.draftNode) {
       this.nodes.push(this.draftNode);
       if (this.draftChild) {
@@ -275,7 +281,7 @@ export class BrainOSGraphView extends FileView {
         const options: Record<string, string> = { "": "全部思考" };
         for (const thought of this.snapshot.thoughts) options[thought.path] = thought.title;
         new Setting(panel).setName("当前思考").addDropdown(control => control.addOptions(options).setValue(this.thoughtPath).onChange(value => {
-          this.persistViewport(); this.closeEditor(); this.thoughtPath = value; this.selected = undefined;
+          this.persistViewport(); this.closeEditor(); this.thoughtPath = value; this.selectedNodes.clear(); this.selected = undefined;
           this.restoreViewport(); this.filterSnapshot(); this.draw();
         }));
       }
@@ -390,7 +396,7 @@ export class BrainOSGraphView extends FileView {
     if (!(file instanceof TFile)) { new Notice("当前没有打开的 Markdown 笔记"); return; }
     const node = this.nodes.find(item => item.ownerPath === file.path) ?? this.nodes.find(item => item.openPath === file.path);
     if (!node) { new Notice("当前文件未出现在所选思考图谱中"); return; }
-    this.selected = node.path; this.hovered = node.path; this.forceLayout.setSelected(this.selected); this.pan = { x: -node.x, y: -node.y }; this.scheduleLayoutSave(); this.startLayoutAnimation(); this.draw(); this.canvas.focus();
+    this.selectedNodes.clear(); this.selected = node.path; this.hovered = node.path; this.forceLayout.setSelected(this.selected); this.pan = { x: -node.x, y: -node.y }; this.scheduleLayoutSave(); this.startLayoutAnimation(); this.draw(); this.canvas.focus();
   }
 
   private resize() {
@@ -426,6 +432,7 @@ export class BrainOSGraphView extends FileView {
 
   private draw() {
     if (!this.canvas || this.closed) return;
+    if (this.hoveredEdge && !this.edges.includes(this.hoveredEdge)) this.clearEdgeHover();
     const ctx = this.canvas.getContext("2d"); if (!ctx) return;
     const width = this.canvas.clientWidth, height = this.canvas.clientHeight;
     const dpr = window.devicePixelRatio || 1;
@@ -481,13 +488,15 @@ export class BrainOSGraphView extends FileView {
     const points = new Map(this.nodes.map(node => [node.path, this.worldToScreen(node)]));
     const radii = new Map(this.nodes.map(node => [node.path,
       nodeScreenRadius(node.weight ?? node.degree, zoom, options.nodeSizeMultiplier)]));
-    const strokes = new Set<string>();
+    const directions = new Set(this.edges.map(edge => JSON.stringify([edge.from, edge.to])));
+    let flowing = false;
     ctx.lineCap = "round";
     for (const edge of this.edges) {
       const a = byPath.get(edge.from), b = byPath.get(edge.to);
       const p = points.get(edge.from), q = points.get(edge.to);
       if (!a || !b || !p || !q || edge.from === edge.to) continue;
-      const edgeActive = edge.from === focus || edge.to === focus;
+      const edgeSelected = !!this.hoveredEdge && edgeStrokeKey(edge.from, edge.to) === edgeStrokeKey(this.hoveredEdge.from, this.hoveredEdge.to);
+      const edgeActive = edgeSelected || edge.from === focus || edge.to === focus;
       const strokeKey = edgeStrokeKey(edge.from, edge.to);
       const alpha = opacity("e:" + strokeKey, !focus || edgeActive ? 1 : 0.2);
       if (!edgeInViewport(p, q, width, height, options.lineSizeMultiplier + 2)) continue;
@@ -499,13 +508,15 @@ export class BrainOSGraphView extends FileView {
       ctx.strokeStyle = edgeActive ? accent : edgeColor;
       // Canvas coordinates are already projected. Obsidian's world line width
       // divides by zoom, which becomes a constant screen-space thickness here.
-      ctx.lineWidth = Math.max(0.1, options.lineSizeMultiplier);
-      if (!strokes.has(strokeKey) && distance > sourceRadius + targetRadius) {
-        strokes.add(strokeKey);
+      ctx.lineWidth = Math.max(0.1, options.lineSizeMultiplier) + (edgeSelected ? 2 : 0);
+      const lane = directions.has(JSON.stringify([edge.to, edge.from])) ? 3 : 0;
+      if (distance > sourceRadius + targetRadius) {
+        flowing = true;
+        ctx.setLineDash([8, 6]); ctx.lineDashOffset = -(now / 1000 * 28) % 14;
         ctx.beginPath();
-        ctx.moveTo(p.x + ux * sourceRadius, p.y + uy * sourceRadius);
-        ctx.lineTo(q.x - ux * targetRadius, q.y - uy * targetRadius);
-        ctx.stroke();
+        ctx.moveTo(p.x + ux * sourceRadius - uy * lane, p.y + uy * sourceRadius + ux * lane);
+        ctx.lineTo(q.x - ux * targetRadius - uy * lane, q.y - uy * targetRadius + ux * lane);
+        ctx.stroke(); ctx.setLineDash([]); ctx.lineDashOffset = 0;
       }
       if (options.showArrows && distance > sourceRadius + targetRadius + 10) {
         const arrowAlpha = Math.max(0, Math.min(1, 2 * (zoom - 0.3)));
@@ -541,9 +552,9 @@ export class BrainOSGraphView extends FileView {
         top: point.y - radius - 3, bottom: point.y + radius + 3 }, width, height);
       if (circleVisible) {
         ctx.globalAlpha = alpha * (kind === "unresolved" || node.placeholder ? 0.5 : 1);
-        ctx.fillStyle = isFocus ? accent : node.path === this.selected ? focusedFill : isMatch ? focusedFill : node.placeholder ? dim : typeColors[kind];
+        ctx.fillStyle = isFocus ? accent : (node.path === this.selected || this.selectedNodes.has(node.path)) ? focusedFill : isMatch ? focusedFill : node.placeholder ? dim : typeColors[kind];
         ctx.beginPath(); ctx.arc(point.x, point.y, radius, 0, Math.PI * 2); ctx.fill();
-        if (isFocus || node.path === this.selected) {
+        if (isFocus || node.path === this.selected || this.selectedNodes.has(node.path)) {
           ctx.strokeStyle = focusedFill; ctx.globalAlpha = alpha; ctx.lineWidth = 1;
           ctx.beginPath(); ctx.arc(point.x, point.y, radius + 2, 0, Math.PI * 2); ctx.stroke();
         }
@@ -566,32 +577,50 @@ export class BrainOSGraphView extends FileView {
     }
     for (const key of this.rendererOpacity.keys()) if (!alive.has(key)) this.rendererOpacity.delete(key);
     ctx.globalAlpha = 1;
-    if (fading && this.rendererFrame === undefined) this.rendererFrame = requestAnimationFrame(() => {
-      this.rendererFrame = undefined;
-      if (!this.closed) this.draw();
-    });
+    if (this.gesture?.kind === "box" && this.gesture.moved) {
+      const { start, end } = this.gesture;
+      ctx.fillStyle = accent; ctx.globalAlpha = 0.12;
+      ctx.fillRect(Math.min(start.x, end.x), Math.min(start.y, end.y), Math.abs(end.x - start.x), Math.abs(end.y - start.y));
+      ctx.strokeStyle = accent; ctx.globalAlpha = 0.9; ctx.lineWidth = 1; ctx.setLineDash([4, 3]);
+      ctx.strokeRect(Math.min(start.x, end.x), Math.min(start.y, end.y), Math.abs(end.x - start.x), Math.abs(end.y - start.y));
+      ctx.setLineDash([]); ctx.globalAlpha = 1;
+    }
+    if ((fading || flowing) && this.rendererFrame === undefined && width > 0 && height > 0) {
+      const animate = (time: number) => {
+        this.rendererFrame = undefined;
+        if (this.closed) return;
+        if (time - this.rendererLastDraw < 32) { this.rendererFrame = requestAnimationFrame(animate); return; }
+        this.draw();
+      };
+      this.rendererFrame = requestAnimationFrame(animate);
+    }
     let empty = this.contentEl.querySelector<HTMLElement>(".brainos-graph-empty");
     if (!this.nodes.length && !empty) empty = this.contentEl.createDiv({ cls: "brainos-graph-empty", text: "双击空白，写下第一个想法" });
     if (this.nodes.length) empty?.remove();
     const selected = this.nodes.find(node => node.path === this.selected);
     this.positionDraftEditor();
-    this.status.setText(this.draftNode ? "输入节点标题 · Enter 确认 · Tab 确认并延伸 · Esc 取消" : selected ? `${selected.label}${this.file && selected.ownerPath && selected.ownerPath !== this.file.path ? ` · 引用自 ${selected.ownerPath.split("/").pop()?.replace(/\.md$/, "")}` : ""} · Tab 继续 · Enter 同起点分支 · 空格编辑标题` : `${this.nodes.length} 个节点 · ${this.edges.length} 条连线`);
+    this.status.setText(this.draftNode ? "输入节点标题 · Enter 确认 · Tab 确认并延伸 · Esc 取消" : this.selectedNodes.size > 1 ? `已框选 ${this.selectedNodes.size} 个节点 · 退格键批量删除 · Esc 取消` : selected ? `${selected.label}${this.file && selected.ownerPath && selected.ownerPath !== this.file.path ? ` · 引用自 ${selected.ownerPath.split("/").pop()?.replace(/\.md$/, "")}` : ""} · Tab 继续 · Enter 同起点分支 · 空格编辑标题` : `${this.nodes.length} 个节点 · ${this.edges.length} 条连线`);
   }
 
   private onPointerDown(event: PointerEvent) {
     if (event.pointerType === "touch") this.touchPoints.set(event.pointerId, event);
     if (event.pointerType === "touch" && this.touchPoints.size >= 2) { this.beginTouchPan(); return; }
-    if (event.button !== 0 || this.editor || this.busy) return;
-    this.canvas.focus();
+    if ((event.button !== 0 && event.button !== 2) || this.editor || this.busy) return;
+    this.suppressContextMenu = false; this.clearEdgeHover(); this.canvas.focus();
     const rect = this.canvas.getBoundingClientRect(), point = { x: event.clientX - rect.left, y: event.clientY - rect.top };
     const node = this.nodeAt(point.x, point.y);
     const base = { pointer: event.pointerId, start: point, last: point, moved: false };
-    if (node) {
-      this.selected = node.path;
-      const world = this.screenToWorld(point.x, point.y);
-      this.gesture = event.altKey && !node.placeholder ? { ...base, kind: "link", node, end: point } : { ...base, kind: "node", node, offset: { x: node.x - world.x, y: node.y - world.y } };
-      if (this.gesture.kind === "node") this.forceLayout.pin(node.path, { x: node.x, y: node.y });
-    } else { this.selected = undefined; this.gesture = { ...base, kind: "pan" }; }
+    if (event.button === 2 || event.pointerType === "touch" && !node) {
+      this.gesture = { ...base, kind: "pan", right: event.button === 2 };
+    } else {
+      this.selectedNodes.clear(); this.selected = node?.path; this.hovered = undefined;
+      if (node && event.altKey && !node.placeholder) this.gesture = { ...base, kind: "link", node, end: point };
+      else if (node) {
+        const world = this.screenToWorld(point.x, point.y);
+        this.gesture = { ...base, kind: "node", node, offset: { x: node.x - world.x, y: node.y - world.y } };
+        this.forceLayout.pin(node.path, { x: node.x, y: node.y });
+      } else this.gesture = { ...base, kind: "box", end: point, edge: node ? undefined : this.edgeAt(point.x, point.y) };
+    }
     this.forceLayout.setSelected(this.selected);
     this.startLayoutAnimation();
     this.canvas.setPointerCapture(event.pointerId); this.draw();
@@ -605,14 +634,30 @@ export class BrainOSGraphView extends FileView {
     const rect = this.canvas.getBoundingClientRect(), point = { x: event.clientX - rect.left, y: event.clientY - rect.top };
     if (!this.gesture) {
       const nextHover = this.nodeAt(point.x, point.y)?.path;
-      if (nextHover !== this.hovered) { this.hovered = nextHover; this.draw(); }
+      const nextEdge = !nextHover && !this.editor && !this.busy ? this.edgeAt(point.x, point.y) : undefined;
+      if (nextHover !== this.hovered || nextEdge !== this.hoveredEdge) {
+        this.hovered = nextHover; this.hoveredEdge = nextEdge;
+        if (nextEdge) this.canvas.addClass("is-edge-hovered");
+        else this.canvas.removeClass("is-edge-hovered");
+        this.draw();
+      }
       return;
     }
     const gesture = this.gesture; if (event.pointerId !== gesture.pointer) return;
     if (Math.hypot(point.x - gesture.start.x, point.y - gesture.start.y) > 4) gesture.moved = true;
     if (!gesture.moved) return;
-    this.canvas.addClass("is-dragging");
-    if (gesture.kind === "node") {
+    this.canvas.addClass(gesture.kind === "box" ? "is-selecting" : "is-dragging");
+    if (gesture.kind === "box") {
+      gesture.end = point;
+      const left = Math.min(gesture.start.x, point.x), right = Math.max(gesture.start.x, point.x);
+      const top = Math.min(gesture.start.y, point.y), bottom = Math.max(gesture.start.y, point.y);
+      this.selectedNodes = new Set(this.nodes.filter(node => {
+        const p = this.worldToScreen(node);
+        return !node.placeholder && p.x >= left && p.x <= right && p.y >= top && p.y <= bottom;
+      }).map(node => node.path));
+      this.selected = this.selectedNodes.size === 1 ? [...this.selectedNodes][0] : undefined;
+      this.forceLayout.setSelected(this.selected);
+    } else if (gesture.kind === "node") {
       const world = this.screenToWorld(point.x, point.y);
       gesture.node.x = world.x + gesture.offset.x; gesture.node.y = world.y + gesture.offset.y;
       this.forceLayout.movePinned(gesture.node.path, { x: gesture.node.x, y: gesture.node.y });
@@ -634,7 +679,18 @@ export class BrainOSGraphView extends FileView {
     }
     const gesture = this.gesture; if (!gesture || event.pointerId !== gesture.pointer) return;
     this.cancelGesture();
-    if (!gesture.moved) return;
+    if (gesture.kind === "pan" && gesture.right) {
+      this.suppressContextMenu = true;
+      if (!gesture.moved) this.showContextMenu(event);
+      return;
+    }
+    if (!gesture.moved) {
+      if (gesture.kind === "box") {
+        const edge = gesture.edge;
+        if (edge && this.edges.includes(edge)) void this.disconnectEdge(edge);
+      }
+      return;
+    }
     if (gesture.kind === "node") { this.forceLayout.unpin(gesture.node.path); this.scheduleLayoutSave(); this.startLayoutAnimation(); }
     if (gesture.kind === "link") {
       const rect = this.canvas.getBoundingClientRect(), target = this.nodeAt(event.clientX - rect.left, event.clientY - rect.top);
@@ -648,11 +704,12 @@ export class BrainOSGraphView extends FileView {
     const pointer = this.gesture?.pointer;
     this.gesture = undefined;
     if (pointer !== undefined && this.canvas.hasPointerCapture(pointer)) this.canvas.releasePointerCapture(pointer);
-    this.canvas?.removeClass("is-dragging");
+    this.canvas?.removeClass("is-dragging"); this.canvas?.removeClass("is-selecting");
     if (!this.closed) this.draw();
   }
 
   private onPointerCancel(event: PointerEvent) {
+    if (this.gesture?.kind === "box") { this.selectedNodes.clear(); this.selected = undefined; this.forceLayout.setSelected(undefined); }
     if (event.pointerType === "touch") this.touchPoints.delete(event.pointerId);
     this.touchPan = undefined;
     this.canvas?.classList.remove("is-touch-panning");
@@ -722,6 +779,11 @@ export class BrainOSGraphView extends FileView {
   }
 
   private onKeyDown(event: KeyboardEvent) {
+    if ((event.metaKey || event.ctrlKey) && !event.altKey && !event.isComposing && event.key.toLowerCase() === "z" && !this.editor) {
+      event.preventDefault(); event.stopPropagation();
+      if (!event.repeat && !this.busy) void this.undoGraphEdit(event.shiftKey);
+      return;
+    }
     if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "f" && !this.editor) {
       event.preventDefault(); this.toggleSearch(true); return;
     }
@@ -732,6 +794,9 @@ export class BrainOSGraphView extends FileView {
     }
     if (event.isComposing || event.metaKey || event.ctrlKey || event.altKey || this.editor || this.busy) return;
     if (event.key.toLowerCase() === "f") { event.preventDefault(); this.fitToView(); return; }
+    if ((event.key === "Backspace" || event.key === "Delete") && this.selectedNodes.size) {
+      event.preventDefault(); event.stopPropagation(); if (!event.repeat) void this.deleteSelectedNodes(); return;
+    }
     const node = this.nodes.find(item => item.path === this.selected);
     if (event.key === "Tab" || event.key === "Enter") { event.preventDefault(); void this.createRelative(event.key === "Tab"); }
     else if (event.key === " " && node) {
@@ -742,7 +807,7 @@ export class BrainOSGraphView extends FileView {
       event.preventDefault(); event.stopPropagation();
       if (!event.repeat) this.removeNode(node, event.key !== "Backspace");
     }
-    else if (event.key === "Escape") { this.selected = undefined; this.forceLayout.setSelected(undefined); this.draw(); }
+    else if (event.key === "Escape") { this.selectedNodes.clear(); this.selected = undefined; this.forceLayout.setSelected(undefined); this.draw(); }
   }
 
   private editingThought(node?: GraphNode): string | undefined {
@@ -792,6 +857,7 @@ export class BrainOSGraphView extends FileView {
     if (target && !isThoughtFile(target, this.plugin.layout.settings.noteFolder)) { new Notice("这篇笔记不在思考目录中"); return; }
     if (this.source === "vault" || !target) { new Notice("请先打开一个思考文件，或运行「新建思考」命令"); return; }
     this.closeEditor();
+    this.selectedNodes.clear();
     const draft: GraphNode = { path: `draft:${crypto.randomUUID()}`, label: "", openPath: "", degree: parent ? 1 : 0, thoughts: target ? [target] : [], kind: "note", ...point };
     this.draftNode = draft; this.draftParent = parent; this.draftChild = insertion?.child;
     this.filterSnapshot();
@@ -884,7 +950,7 @@ export class BrainOSGraphView extends FileView {
       const original = await readThoughtNode(this.app, node.path);
       if (this.closed) return;
       this.closeEditor();
-      this.editingNode = node; this.selected = node.path; this.hovered = node.path;
+      this.selectedNodes.clear(); this.editingNode = node; this.selected = node.path; this.hovered = node.path;
       this.forceLayout.setSelected(node.path);
       const form = this.contentEl.createEl("form", { cls: "brainos-node-title-editor" }); this.editor = form;
       const title = form.createEl("input", { cls: "brainos-node-title-input", attr: { "aria-label": "节点标题", autocomplete: "off" } });
@@ -955,7 +1021,7 @@ export class BrainOSGraphView extends FileView {
       new NodeReferenceModal(this.app, [...byKey.values()], node => {
         void this.runEdit(async () => {
           await referenceThoughtNode(this.app, thought, node, parent);
-          this.selected = node.path; this.plugin.recordSessionStep(node.path, thought);
+          this.selectedNodes.clear(); this.selected = node.path; this.plugin.recordSessionStep(node.path, thought);
           await this.refresh(); this.plugin.refreshViews(); this.canvas.focus();
         });
       }).open();
@@ -965,6 +1031,7 @@ export class BrainOSGraphView extends FileView {
   cancelNodeEditing() { this.closeEditor(); this.draw(); }
 
   private closeEditor() {
+    this.clearEdgeHover();
     this.titleSuggest?.dispose(); this.titleSuggest = undefined;
     this.editingNode = undefined;
     this.editor?.remove(); this.editor = undefined;
@@ -981,10 +1048,43 @@ export class BrainOSGraphView extends FileView {
     if (!this.closed) this.canvas?.focus();
   }
 
+  private async undoGraphEdit(redo = false) {
+    if (this.busy) return;
+    this.busy = true;
+    try {
+      const history = graphHistory(this.app);
+      if (await (redo ? history.redo() : history.undo())) {
+        this.closeEditor(); await this.refresh(); this.plugin.refreshViews(); this.canvas.focus();
+      }
+    } catch (error) { new Notice(error instanceof Error ? error.message : String(error)); }
+    finally { this.busy = false; }
+  }
+
   private async runEdit(action: () => Promise<void>) {
     if (this.busy) return;
     this.busy = true;
-    try { await action(); } catch (error) { new Notice(error instanceof Error ? error.message : String(error)); }
+    try {
+      await graphHistory(this.app).record(action, {
+        capture: () => ({
+          positions: JSON.parse(JSON.stringify(this.plugin.layout.positions)) as Record<string, Point>,
+          steps: this.plugin.layout.sessions.map(session => [...session.stepKeys]),
+          selected: this.selected, selectedNodes: [...this.selectedNodes],
+        }),
+        restore: async (value, previous) => {
+          for (const key of new Set([...Object.keys(value.positions), ...Object.keys(previous.positions)])) {
+            if (JSON.stringify(value.positions[key]) === JSON.stringify(previous.positions[key])) continue;
+            if (value.positions[key]) this.plugin.layout.positions[key] = { ...value.positions[key] };
+            else delete this.plugin.layout.positions[key];
+          }
+          value.steps.forEach((steps, index) => {
+            const session = this.plugin.layout.sessions[index];
+            if (session && JSON.stringify(steps) !== JSON.stringify(previous.steps[index])) session.stepKeys = [...steps];
+          });
+          this.selected = value.selected; this.selectedNodes = new Set(value.selectedNodes);
+          await this.plugin.saveLayout();
+        },
+      });
+    } catch (error) { new Notice(error instanceof Error ? error.message : String(error)); }
     finally { this.busy = false; }
   }
 
@@ -998,6 +1098,21 @@ export class BrainOSGraphView extends FileView {
       if (session?.stepKeys[session.stepKeys.length - 1] !== from.path) this.plugin.recordSessionStep(from.path, thought);
       this.plugin.recordSessionStep(to.path, thought);
       await this.refresh(); this.plugin.refreshViews();
+    });
+  }
+
+  private async deleteSelectedNodes() {
+    if (this.busy || !this.selectedNodes.size) return;
+    const selected = [...this.selectedNodes];
+    if (this.source === "vault") {
+      this.plugin.layout.graph.hiddenPaths = [...new Set([...this.plugin.layout.graph.hiddenPaths, ...selected])];
+      this.selectedNodes.clear(); this.selected = undefined; await this.plugin.saveLayout(); this.filterSnapshot(); this.draw(); return;
+    }
+    const thought = this.file?.path ?? this.thoughtPath;
+    if (!thought) { new Notice("请先选择要修改的思考文件"); return; }
+    await this.runEdit(async () => {
+      await removeThoughtNodes(this.app, thought, selected);
+      this.selectedNodes.clear(); this.selected = undefined; await this.refresh(); this.plugin.refreshViews();
     });
   }
 
@@ -1017,12 +1132,50 @@ export class BrainOSGraphView extends FileView {
     else void remove();
   }
 
+  private edgeAt(x: number, y: number): GraphEdge | undefined {
+    const byPath = new Map(this.nodes.map(node => [node.path, node]));
+    let closest: GraphEdge | undefined, distance = 8 + this.graphOptions.lineSizeMultiplier / 2;
+    for (const edge of this.edges) {
+      const a = byPath.get(edge.from), b = byPath.get(edge.to); if (!a || !b) continue;
+      const p = this.worldToScreen(a), q = this.worldToScreen(b), dx = q.x - p.x, dy = q.y - p.y;
+      const length = dx * dx + dy * dy; if (!Number.isFinite(length) || length < 0.001) continue;
+      const t = Math.max(0, Math.min(1, ((x - p.x) * dx + (y - p.y) * dy) / length));
+      const next = Math.hypot(x - p.x - t * dx, y - p.y - t * dy);
+      if (next < distance) { distance = next; closest = edge; }
+    }
+    return closest;
+  }
+
+  private clearEdgeHover() {
+    this.hoveredEdge = undefined; this.canvas?.removeClass("is-edge-hovered");
+  }
+
+  private async disconnectEdge(edge: GraphEdge) {
+    if (this.busy) return;
+    const thought = this.file?.path || this.thoughtPath || (edge.thoughts.length === 1 ? edge.thoughts[0] : undefined);
+    if (this.source !== "vault" && !thought) { new Notice("连线属于多个思考，请先选择要修改的思考"); return; }
+    await this.runEdit(async () => {
+      if (this.source === "vault") {
+        const directions = this.edges.filter(value => edgeStrokeKey(value.from, value.to) === edgeStrokeKey(edge.from, edge.to));
+        for (const direction of directions) await removeVaultLink(this.app, direction.from, direction.to);
+      } else await unlinkThoughtNodes(this.app, thought!, edge.from, edge.to, true);
+      this.clearEdgeHover(); await this.refresh(); this.plugin.refreshViews(); this.canvas.focus();
+    });
+  }
+
   private onContextMenu(event: MouseEvent) {
+    event.preventDefault();
+    if (this.gesture?.kind === "pan" && this.gesture.right || this.suppressContextMenu && event.button === 2) return;
+    this.showContextMenu(event);
+  }
+
+  private showContextMenu(event: MouseEvent) {
     event.preventDefault(); if (this.editor || this.busy) return;
+    this.clearEdgeHover();
     const rect = this.canvas.getBoundingClientRect(), x = event.clientX - rect.left, y = event.clientY - rect.top;
     const node = this.nodeAt(x, y), menu = new Menu();
     if (node) {
-      this.selected = node.path; this.forceLayout.setSelected(this.selected); this.startLayoutAnimation(); this.draw();
+      this.selectedNodes.clear(); this.selected = node.path; this.forceLayout.setSelected(this.selected); this.startLayoutAnimation(); this.draw();
       menu.addItem(item => item.setTitle("编辑节点").setIcon("pencil").onClick(() => void this.beginEdit(node)));
       menu.addItem(item => item.setTitle("打开来源 Markdown").setIcon("file-text").onClick(() => void this.app.workspace.openLinkText(node.openPath, "", false)));
       menu.addItem(item => item.setTitle("引用已有节点…").setIcon("link").onClick(() => void this.openReferencePicker()));
@@ -1031,22 +1184,8 @@ export class BrainOSGraphView extends FileView {
       menu.addItem(item => item.setTitle(this.source === "vault" ? "从图谱隐藏" : node.ownerPath === this.file?.path ? "删除此节点…" : "从当前思考移除引用…").setIcon("unlink").onClick(() => this.removeNode(node)));
     } else {
       menu.addItem(item => item.setTitle("在这里新建独立想法").setIcon("plus").onClick(() => void this.beginCreate(this.screenToWorld(x, y))));
-      const byPath = new Map(this.nodes.map(item => [item.path, item]));
-      const edge = this.edges.find(item => {
-        const a = byPath.get(item.from), b = byPath.get(item.to); if (!a || !b) return false;
-        const p = this.worldToScreen(a), q = this.worldToScreen(b), dx = q.x - p.x, dy = q.y - p.y;
-        const t = Math.max(0, Math.min(1, ((x - p.x) * dx + (y - p.y) * dy) / (dx * dx + dy * dy || 1)));
-        return Math.hypot(x - p.x - t * dx, y - p.y - t * dy) < 7;
-      });
-      if (edge) menu.addItem(item => item.setTitle("断开此连线").setIcon("unlink").onClick(() => {
-        if (this.source === "vault") {
-          void this.runEdit(async () => { await removeVaultLink(this.app, edge.from, edge.to); await this.refresh(); this.plugin.refreshViews(); });
-          return;
-        }
-        const thought = this.thoughtPath || (edge.thoughts.length === 1 ? edge.thoughts[0] : undefined);
-        if (!thought) { new Notice("连线属于多个思考，请先选择要修改的思考"); return; }
-        void this.runEdit(async () => { await unlinkThoughtNodes(this.app, thought, edge.from, edge.to); await this.refresh(); this.plugin.refreshViews(); });
-      }));
+      const edge = this.edgeAt(x, y);
+      if (edge) menu.addItem(item => item.setTitle("断开此连线").setIcon("unlink").onClick(() => void this.disconnectEdge(edge)));
     }
     menu.showAtMouseEvent(event);
   }
