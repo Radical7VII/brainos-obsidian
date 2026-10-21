@@ -1774,6 +1774,16 @@ function titleKeyAction(event) {
   return "none";
 }
 
+// src/graph-wheel.ts
+function isMacTrackpadPan(event, platform) {
+  if (!/Mac/i.test(platform) || event.ctrlKey || event.deltaMode !== 0) return false;
+  if (event.deltaY === 0) return event.deltaX !== 0;
+  if (typeof event.wheelDeltaY === "number") {
+    return Math.abs(event.wheelDeltaY + event.deltaY * 3) < 0.01;
+  }
+  return !Number.isInteger(event.deltaY) || !Number.isInteger(event.deltaX);
+}
+
 // src/mind-view-mode.ts
 var VIEW_TYPE = "brainos-graph-view";
 var MindViewMode = class {
@@ -2703,13 +2713,27 @@ var BrainOSGraphView = class extends import_obsidian6.FileView {
     this.draw();
   }
   onWheel(event) {
-    var _a;
+    var _a, _b, _c, _d, _e, _f;
     event.preventDefault();
     if (this.editor) return;
+    const platform = (_e = (_d = (_b = (_a = this.canvas.ownerDocument) == null ? void 0 : _a.defaultView) == null ? void 0 : _b.navigator.platform) != null ? _d : (_c = globalThis.navigator) == null ? void 0 : _c.platform) != null ? _e : "";
+    if (isMacTrackpadPan(event, platform)) {
+      if (this.cameraFrame !== void 0) cancelAnimationFrame(this.cameraFrame);
+      this.cameraFrame = void 0;
+      this.targetZoom = void 0;
+      this.zoomAnchor = void 0;
+      this.pan.x -= event.deltaX / this.zoom;
+      this.pan.y -= event.deltaY / this.zoom;
+      this.hovered = void 0;
+      this.clearEdgeHover();
+      this.scheduleLayoutSave();
+      this.draw();
+      return;
+    }
     const rect = this.canvas.getBoundingClientRect();
     this.zoomAnchor = { x: event.clientX - rect.left, y: event.clientY - rect.top };
     const delta = event.deltaY * (event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? this.canvas.clientHeight : 1);
-    this.targetZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, ((_a = this.targetZoom) != null ? _a : this.zoom) * Math.exp(-delta * 2e-3)));
+    this.targetZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, ((_f = this.targetZoom) != null ? _f : this.zoom) * Math.exp(-delta * 2e-3)));
     this.animateZoom();
   }
   animateZoom() {

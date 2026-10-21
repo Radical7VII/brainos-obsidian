@@ -12,6 +12,7 @@ import { NodeTitleCandidate, NodeTitleSuggest } from "./node-title-suggest";
 import { graphHistory } from "./graph-history";
 import { isThoughtFile } from "./thought-scope";
 import { titleKeyAction } from "./node-title-input";
+import { isMacTrackpadPan } from "./graph-wheel";
 
 export { VIEW_TYPE } from "./mind-view-mode";
 import { VIEW_TYPE } from "./mind-view-mode";
@@ -747,6 +748,22 @@ export class BrainOSGraphView extends FileView {
 
   private onWheel(event: WheelEvent) {
     event.preventDefault(); if (this.editor) return;
+    const platform = this.canvas.ownerDocument?.defaultView?.navigator.platform ?? globalThis.navigator?.platform ?? "";
+    if (isMacTrackpadPan(event, platform)) {
+      // Wheel deltas are screen pixels; the camera stores its offset in world units.
+      // Stop pending zoom so switching from pinch to pan cannot move the anchor.
+      if (this.cameraFrame !== undefined) cancelAnimationFrame(this.cameraFrame);
+      this.cameraFrame = undefined;
+      this.targetZoom = undefined;
+      this.zoomAnchor = undefined;
+      this.pan.x -= event.deltaX / this.zoom;
+      this.pan.y -= event.deltaY / this.zoom;
+      this.hovered = undefined;
+      this.clearEdgeHover();
+      this.scheduleLayoutSave();
+      this.draw();
+      return;
+    }
     const rect = this.canvas.getBoundingClientRect();
     this.zoomAnchor = { x: event.clientX - rect.left, y: event.clientY - rect.top };
     const delta = event.deltaY * (event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? this.canvas.clientHeight : 1);

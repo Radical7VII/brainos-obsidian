@@ -465,3 +465,39 @@ test('directed edges render moving dashes with separate reverse lanes and reset 
     globalThis.window=oldWindow;globalThis.getComputedStyle=oldStyle;Object.defineProperty(globalThis,'performance',{configurable:true,value:oldPerformance});
   }
 });
+
+function wheelEvent(overrides={}) {
+  return {deltaX:0,deltaY:10,deltaMode:0,ctrlKey:false,clientX:350,clientY:250,preventDefault(){this.prevented=true;},...overrides};
+}
+function macCanvas(view){view.canvas.ownerDocument={defaultView:{navigator:{platform:'MacIntel'}}};}
+test('Mac precise two-finger scroll pans in screen pixels and cancels pending pinch zoom',async()=>{
+  const {view}=await fixture('- A\n');macCanvas(view);view.zoom=2;view.pan={x:10,y:20};
+  view.targetZoom=3;view.cameraFrame=1;view.zoomAnchor={x:350,y:250};
+  const event=wheelEvent({deltaX:24,deltaY:18,wheelDeltaY:-54});view.onWheel(event);
+  assert.equal(event.prevented,true);assert.deepEqual(view.pan,{x:-2,y:11});assert.equal(view.zoom,2);
+  assert.equal(view.targetZoom,undefined);assert.equal(view.cameraFrame,undefined);
+  view.onWheel(wheelEvent({deltaX:-8,deltaY:0,wheelDeltaY:0}));assert.deepEqual(view.pan,{x:2,y:11});
+});
+test('Mac pinch keeps cursor-anchored zoom while mouse wheels and other platforms retain zoom',async()=>{
+  for(const [platform,input] of [
+    ['MacIntel',{ctrlKey:true,deltaY:-8,wheelDeltaY:24}],
+    ['MacIntel',{deltaY:100,wheelDeltaY:-120}],
+    ['MacIntel',{deltaMode:1,deltaY:3,wheelDeltaY:-120}],
+    ['Win32',{deltaY:18,wheelDeltaY:-54}],
+  ]){
+    const {view}=await fixture('- A\n');view.canvas.ownerDocument={defaultView:{navigator:{platform}}};
+    view.onWheel(wheelEvent(input));assert.deepEqual(view.pan,{x:0,y:0});
+    assert.notEqual(view.targetZoom,undefined);assert.deepEqual(view.zoomAnchor,{x:350,y:250});
+    // Run the existing animation to completion and check the cursor's world point.
+    const before=view.screenToWorld(350,250),oldRAF=globalThis.requestAnimationFrame;
+    const frames=[];globalThis.requestAnimationFrame=callback=>{frames.push(callback);return frames.length;};
+    try{view.cameraFrame=undefined;view.animateZoom();while(frames.length)frames.shift()();}
+    finally{globalThis.requestAnimationFrame=oldRAF;}
+    const after=view.screenToWorld(350,250);assert.ok(Math.abs(before.x-after.x)<1e-8);assert.ok(Math.abs(before.y-after.y)<1e-8);
+  }
+});
+test('wheel input leaves the camera unchanged during inline editing',async()=>{
+  const {view}=await fixture('- A\n');macCanvas(view);view.editor={};
+  view.onWheel(wheelEvent({deltaX:24,deltaY:18,wheelDeltaY:-54}));
+  assert.deepEqual(view.pan,{x:0,y:0});assert.equal(view.targetZoom,undefined);
+});
