@@ -71,7 +71,7 @@ test('search changes topology and supports basic path/file/tag queries',()=>{
 });
 test('persisted graph options are bounded and malformed values use defaults',()=>{
   const value=loadGraphOptions({source:'bad',display:{nodeSizeMultiplier:Infinity,lineSizeMultiplier:100},forces:{repel:-1},filter:{localDepth:99},hiddenPaths:[3,'a.md']});
-  assert.equal(value.source,'vault');assert.equal(value.display.nodeSizeMultiplier,1);assert.equal(value.display.lineSizeMultiplier,5);
+  assert.equal(value.source,'thoughts');assert.equal(value.display.nodeSizeMultiplier,1);assert.equal(value.display.lineSizeMultiplier,5);
   assert.equal(value.forces.repel,0);assert.equal(value.filter.localDepth,5);assert.deepEqual(value.hiddenPaths,['a.md']);
 });
 test('new thoughts automatically skip occupied names without changing existing files',async()=>{

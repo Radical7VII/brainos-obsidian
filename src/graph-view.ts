@@ -40,6 +40,7 @@ export class BrainOSGraphView extends FileView {
   private nodes: GraphNode[] = [];
   private edges: GraphEdge[] = [];
   private thoughtPath = "";
+  private previewedThoughtPath?: string;
   private zoom = 1;
   private pan: Point = { x: 0, y: 0 };
   private selected?: string;
@@ -97,7 +98,7 @@ export class BrainOSGraphView extends FileView {
     this.thoughtPath = file.path;
     this.localCenter = undefined;
     this.selected = undefined; this.selectedNodes.clear(); this.hovered = undefined;
-    this.restoreViewport();
+    if (this.currentViewportKey !== this.viewportKey()) this.restoreViewport();
     if (this.canvas) await this.refresh();
   }
 
@@ -151,8 +152,7 @@ export class BrainOSGraphView extends FileView {
     const observer = new ResizeObserver(() => this.resize());
     observer.observe(this.contentEl);
     this.register(() => observer.disconnect());
-    // FileView receives its file in setState after onOpen. Avoid briefly building
-    // the entire vault before the file's own mind view is loaded.
+    // FileView receives its active editing file in setState after onOpen.
     this.initialRefreshFrame = requestAnimationFrame(() => {
       this.initialRefreshFrame = undefined;
       if (!this.closed && !this.file) void this.refresh();
@@ -191,7 +191,7 @@ export class BrainOSGraphView extends FileView {
     const thoughts = thoughtFiles.map(file => ({ path: file.path, title: String(this.app.metadataCache.getFileCache(file)?.frontmatter?.title ?? file.basename) }));
     const snapshot = this.source === "vault"
       ? buildVaultSnapshot(this.app, thoughts, this.plugin.layout.graph.filter, this.plugin.layout.settings.noteFolder)
-      : await buildSnapshot(this.app, this.file ?? undefined, this.plugin.layout.settings.noteFolder);
+      : await buildSnapshot(this.app, undefined, this.plugin.layout.settings.noteFolder, this.file ?? undefined);
     if (this.closed || revision !== this.refreshRevision) return;
     this.snapshot = snapshot;
     this.forceLayout.configure(graphForces(this.plugin.layout.graph));
@@ -205,9 +205,7 @@ export class BrainOSGraphView extends FileView {
   }
 
   private filterSnapshot() {
-    const base = this.source === "thoughts" && this.thoughtPath
-      ? { ...this.snapshot, nodes: this.snapshot.nodes.filter(node => node.thoughts.includes(this.thoughtPath)), edges: this.snapshot.edges.filter(edge => edge.thoughts.includes(this.thoughtPath)) }
-      : this.snapshot;
+    const base = this.snapshot;
     const visible = { ...base, nodes: base.nodes.filter(node => !this.plugin.layout.graph.hiddenPaths.includes(node.path)) };
     const result = selectGraph(visible, this.search?.value.trim() ?? "", this.plugin.layout.graph.filter, this.localCenter);
     this.nodes = this.draftNode ? result.nodes.filter(node => !node.placeholder) : result.nodes; this.edges = result.edges;
@@ -225,6 +223,24 @@ export class BrainOSGraphView extends FileView {
     this.forceLayout.sync(this.nodes, this.edges, this.plugin.layout.positions);
     this.forceLayout.setSelected(this.selected);
     this.startLayoutAnimation();
+  }
+
+  previewThought(path?: string) {
+    if (this.previewedThoughtPath === path) return;
+    this.previewedThoughtPath = path;
+    if (this.canvas && !this.closed) this.draw();
+  }
+
+  /** File preview is visual only: it never changes the editing destination or topology. */
+  private activityFocus() {
+    const focus = this.previewedThoughtPath ? undefined : this.hovered ?? this.selected;
+    const thought = this.source === "thoughts" && !this.search?.value.trim() && !focus
+      ? this.previewedThoughtPath ?? this.thoughtPath : undefined;
+    return {
+      focus, thought,
+      nodes: new Set(thought ? this.nodes.filter(node => node.thoughts.includes(thought)).map(node => node.path) : []),
+      edges: new Set(thought ? this.edges.filter(edge => edge.thoughts.includes(thought)) : []),
+    };
   }
 
   private toggleSearch(show = this.searchBox?.hidden ?? true) {
@@ -283,7 +299,7 @@ export class BrainOSGraphView extends FileView {
         for (const thought of this.snapshot.thoughts) options[thought.path] = thought.title;
         new Setting(panel).setName("当前思考").addDropdown(control => control.addOptions(options).setValue(this.thoughtPath).onChange(value => {
           this.persistViewport(); this.closeEditor(); this.thoughtPath = value; this.selectedNodes.clear(); this.selected = undefined;
-          this.restoreViewport(); this.filterSnapshot(); this.draw();
+          this.filterSnapshot(); this.draw();
         }));
       }
     }
@@ -352,11 +368,12 @@ export class BrainOSGraphView extends FileView {
     if (changed) void this.plugin.saveLayout();
   }
 
-  private viewportKey() { return this.file ? `file:${this.file.path}` : this.thoughtPath || "__all__"; }
+  private viewportKey() { return this.source === "thoughts" ? `thoughts:${this.plugin.layout.settings.noteFolder}` : "__all__"; }
 
   private restoreViewport() {
     this.currentViewportKey = this.viewportKey();
-    const saved = this.plugin.layout.viewports?.[this.viewportKey()];
+    const saved = this.plugin.layout.viewports?.[this.viewportKey()]
+      ?? (this.file ? this.plugin.layout.viewports?.[`file:${this.file.path}`] : undefined);
     if (!saved || !Number.isFinite(saved.x) || !Number.isFinite(saved.y) || !Number.isFinite(saved.zoom)) {
       this.pan = { x: 0, y: 0 };
       this.zoom = 1;
@@ -449,8 +466,9 @@ export class BrainOSGraphView extends FileView {
     };
     const edgeColor = color("--graph-line", "--brainos-edge", "--background-modifier-border");
     const fill = color("--graph-node", "--text-muted");
-    const focusedFill = color("--graph-node-focused", "--text-accent", "--interactive-accent");
     const accent = color("--interactive-accent", "--text-accent");
+    const focusedFill = accent;
+    const normal = color("--text-normal", "--graph-text");
     const text = color("--graph-text", "--text-normal");
     const dim = color("--graph-node-unresolved", "--text-faint");
     const typeColors = {
@@ -467,7 +485,8 @@ export class BrainOSGraphView extends FileView {
     const matches = new Set(query ? this.nodes.filter(node => node.label.toLocaleLowerCase().includes(query)
       || node.path.toLocaleLowerCase().includes(query)).map(node => node.path) : []);
     const byPath = new Map(this.nodes.map(node => [node.path, node]));
-    const focus = this.hovered && byPath.has(this.hovered) ? this.hovered : this.selected;
+    const activity = this.activityFocus();
+    const focus = activity.focus && byPath.has(activity.focus) ? activity.focus : undefined;
     const neighbors = new Set<string>();
     if (focus) for (const edge of this.edges) {
       if (edge.from === focus) neighbors.add(edge.to);
@@ -497,16 +516,17 @@ export class BrainOSGraphView extends FileView {
       const p = points.get(edge.from), q = points.get(edge.to);
       if (!a || !b || !p || !q || edge.from === edge.to) continue;
       const edgeSelected = !!this.hoveredEdge && edgeStrokeKey(edge.from, edge.to) === edgeStrokeKey(this.hoveredEdge.from, this.hoveredEdge.to);
-      const edgeActive = edgeSelected || edge.from === focus || edge.to === focus;
-      const strokeKey = edgeStrokeKey(edge.from, edge.to);
-      const alpha = opacity("e:" + strokeKey, !focus || edgeActive ? 1 : 0.2);
+      const edgeActive = edgeSelected || edge.from === focus || edge.to === focus || activity.edges.has(edge);
+      const edgeHighlighted = edgeSelected || edge.from === focus || edge.to === focus
+        || !!this.previewedThoughtPath && activity.edges.has(edge);
+      const alpha = opacity("e:" + JSON.stringify([edge.from, edge.to]), !(focus || activity.thought) || edgeActive ? 1 : 0.2);
       if (!edgeInViewport(p, q, width, height, options.lineSizeMultiplier + 2)) continue;
       const dx = q.x - p.x, dy = q.y - p.y, distance = Math.hypot(dx, dy);
       if (!Number.isFinite(distance) || distance < 0.001) continue;
       const ux = dx / distance, uy = dy / distance;
       const sourceRadius = radii.get(a.path)!, targetRadius = radii.get(b.path)!;
       ctx.globalAlpha = alpha;
-      ctx.strokeStyle = edgeActive ? accent : edgeColor;
+      ctx.strokeStyle = edgeHighlighted ? accent : activity.edges.has(edge) ? normal : edgeColor;
       // Canvas coordinates are already projected. Obsidian's world line width
       // divides by zoom, which becomes a constant screen-space thickness here.
       ctx.lineWidth = Math.max(0.1, options.lineSizeMultiplier) + (edgeSelected ? 2 : 0);
@@ -522,7 +542,7 @@ export class BrainOSGraphView extends FileView {
       if (options.showArrows && distance > sourceRadius + targetRadius + 10) {
         const arrowAlpha = Math.max(0, Math.min(1, 2 * (zoom - 0.3)));
         ctx.globalAlpha = alpha * arrowAlpha * 0.5;
-        ctx.fillStyle = text;
+        ctx.fillStyle = edgeHighlighted ? accent : activity.edges.has(edge) ? normal : text;
         const tipX = q.x - ux * (targetRadius + 1), tipY = q.y - uy * (targetRadius + 1);
         const size = 8 * Math.sqrt(Math.max(0.1, options.lineSizeMultiplier));
         ctx.beginPath(); ctx.moveTo(tipX, tipY);
@@ -547,13 +567,16 @@ export class BrainOSGraphView extends FileView {
       const point = points.get(node.path)!, radius = radii.get(node.path)!;
       if (!Number.isFinite(point.x) || !Number.isFinite(point.y)) continue;
       const isFocus = node.path === focus, isMatch = matches.has(node.path);
-      const alpha = opacity("n:" + node.path, !focus || isFocus || neighbors.has(node.path) ? 1 : 0.2);
+      const inThought = activity.nodes.has(node.path);
+      const alpha = opacity("n:" + node.path, !(focus || activity.thought) || isFocus || neighbors.has(node.path) || inThought ? 1 : 0.2);
       const kind = node.kind ?? "note";
       const circleVisible = intersectsViewport({ left: point.x - radius - 3, right: point.x + radius + 3,
         top: point.y - radius - 3, bottom: point.y + radius + 3 }, width, height);
       if (circleVisible) {
         ctx.globalAlpha = alpha * (kind === "unresolved" || node.placeholder ? 0.5 : 1);
-        ctx.fillStyle = isFocus ? accent : (node.path === this.selected || this.selectedNodes.has(node.path)) ? focusedFill : isMatch ? focusedFill : node.placeholder ? dim : typeColors[kind];
+        const highlighted = isFocus || this.selectedNodes.has(node.path) || node.path === this.selected || isMatch
+          || !!this.previewedThoughtPath && inThought;
+        ctx.fillStyle = highlighted ? accent : inThought ? normal : node.placeholder ? dim : typeColors[kind];
         ctx.beginPath(); ctx.arc(point.x, point.y, radius, 0, Math.PI * 2); ctx.fill();
         if (isFocus || node.path === this.selected || this.selectedNodes.has(node.path)) {
           ctx.strokeStyle = focusedFill; ctx.globalAlpha = alpha; ctx.lineWidth = 1;
@@ -1171,6 +1194,7 @@ export class BrainOSGraphView extends FileView {
     if (this.busy) return;
     const thought = this.file?.path || this.thoughtPath || (edge.thoughts.length === 1 ? edge.thoughts[0] : undefined);
     if (this.source !== "vault" && !thought) { new Notice("连线属于多个思考，请先选择要修改的思考"); return; }
+    if (this.source !== "vault" && !edge.thoughts.includes(thought!)) { new Notice("此连线属于其他思考，请先在侧栏选择对应文件"); return; }
     await this.runEdit(async () => {
       if (this.source === "vault") {
         const directions = this.edges.filter(value => edgeStrokeKey(value.from, value.to) === edgeStrokeKey(edge.from, edge.to));

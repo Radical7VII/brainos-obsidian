@@ -247,7 +247,7 @@ export async function removeThoughtNodes(app: App, owner: string, selected: stri
   });
 }
 
-export async function buildThoughtSnapshot(app: App, thoughtFile?: TFile, folder?: string): Promise<GraphSnapshot> {
+export async function buildThoughtSnapshot(app: App, thoughtFile?: TFile, folder?: string, activeFile?: TFile): Promise<GraphSnapshot> {
   const nodes = new Map<string, GraphNode>(), edges = new Map<string, GraphSnapshot["edges"][number]>();
   const thoughts: GraphSnapshot["thoughts"] = [], steps: NonNullable<GraphSnapshot["steps"]> = [];
   const loaded = new Map<string, Promise<LoadedThought>>();
@@ -296,7 +296,7 @@ export async function buildThoughtSnapshot(app: App, thoughtFile?: TFile, folder
     if (folder !== undefined && !isThoughtFile(file.path, folder)) continue;
     const document = await read(file);
     const marked = app.metadataCache.getFileCache(file)?.frontmatter?.brainos_type === "thought-file";
-    if (!thoughtFile && !document.doc.occurrences.length && !document.legacy && !marked) continue;
+    if (!thoughtFile && file.path !== activeFile?.path && !document.doc.occurrences.length && !document.legacy && !marked) continue;
     thoughts.push({ path: file.path, title: file.basename });
     const keys = new Map<string, string>();
     for (const node of document.doc.nodes) keys.set(node.id, node.target ? await resolve(file.path, node.target, node.referenceLabel, node.referenceLabel !== undefined) : addNode(file, node, file.path));
@@ -307,10 +307,6 @@ export async function buildThoughtSnapshot(app: App, thoughtFile?: TFile, folder
       steps.push({ key, title: visit.title, body: visit.body, thoughtPath: file.path, pathIndex: visit.path, ordinal: visit.ordinal });
       for (const link of documentLinks(visit.body)) addEdge(file.path, key, await resolve(file.path, link.target, link.label));
     }
-    if (!thoughtFile && !document.doc.nodes.length) nodes.set("thought:" + file.path, {
-      path: "thought:" + file.path, label: file.basename, openPath: file.path, ownerPath: file.path, x: 0, y: 0,
-      degree: 0, thoughts: [file.path], placeholder: true,
-    });
   }
   for (const edge of edges.values()) { nodes.get(edge.from)!.degree++; nodes.get(edge.to)!.degree++; }
   return { nodes: [...nodes.values()], edges: [...edges.values()], thoughts, steps };

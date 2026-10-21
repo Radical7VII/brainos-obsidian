@@ -9,7 +9,7 @@ export type GraphOptions = {
 };
 export function defaultGraphOptions(): GraphOptions {
   return {
-    source: "vault", hiddenPaths: [],
+    source: "thoughts", hiddenPaths: [],
     display: { nodeSizeMultiplier: 1, lineSizeMultiplier: 1, textFadeMultiplier: 0, showArrows: false },
     forces: { center: 1 - Math.log(0.109) / Math.log(0.01), repel: 10, link: 1, distance: 250 },
     filter: { showTags: false, showAttachments: false, showUnresolved: true, showOrphans: true, localDepth: 1, localIncoming: true, localOutgoing: true },
@@ -25,7 +25,7 @@ export function loadGraphOptions(value: unknown): GraphOptions {
   };
   const bool = (record: Record<string, unknown>, key: string, fallback: boolean) => typeof record[key] === "boolean" ? record[key] as boolean : fallback;
   return {
-    source: raw.source === "thoughts" ? "thoughts" : "vault",
+    source: raw.source === "vault" ? "vault" : "thoughts",
     hiddenPaths: Array.isArray(raw.hiddenPaths) ? raw.hiddenPaths.filter((path): path is string => typeof path === "string") : [],
     display: {
       nodeSizeMultiplier: number(display, "nodeSizeMultiplier", 1, 0.25, 3),

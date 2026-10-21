@@ -8,8 +8,9 @@ import { BrainOSAIProvider, UnconfiguredAIProvider } from "./ai";
 import { FolderSuggest } from "./folder-suggest";
 import { isThoughtFile } from "./thought-scope";
 import { MindViewMode } from "./mind-view-mode";
+import { ThoughtExplorer } from "./thought-explorer";
 
-const DATA_VERSION = 5;
+const DATA_VERSION = 6;
 type BrainOSSettings = { noteFolder: string };
 export type Viewport = { x: number; y: number; zoom: number };
 export type SessionRecord = {
@@ -49,6 +50,23 @@ export default class BrainOSPlugin extends Plugin {
   private readonly newTabActions = new Map<WorkspaceLeaf, HTMLElement>();
   private unloading = false;
   private creatingThought = false;
+  private readonly explorerDocuments = new WeakSet<Document>();
+  private readonly explorer = new ThoughtExplorer({
+    accepts: path => isThoughtFile(path, this.layout.settings.noteFolder)
+      && this.app.vault.getAbstractFileByPath(path) instanceof TFile,
+    preview: path => {
+      for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE)) {
+        if (leaf.view instanceof BrainOSGraphView) leaf.view.previewThought(path);
+      }
+    },
+    select: path => {
+      const view = this.activeGraphView();
+      const file = this.app.vault.getAbstractFileByPath(path);
+      if (!view || !(file instanceof TFile)) return false;
+      void this.openMindView(view.leaf, file);
+      return true;
+    },
+  });
 
   async onload() {
     const saved = await this.loadData() as Partial<LayoutData> | null;
@@ -68,6 +86,8 @@ export default class BrainOSPlugin extends Plugin {
       graph: loadGraphOptions(saved?.graph),
     };
     this.lastMarkdownPath = this.app.workspace.getActiveFile()?.path;
+    // The shared thinking canvas is now the default; keep the optional vault-link mode.
+    if ((saved?.version ?? 0) < DATA_VERSION) this.layout.graph.source = "thoughts";
     this.registerEvent(this.app.workspace.on("file-open", file => {
       if (file?.extension === "md") this.lastMarkdownPath = file.path;
       this.syncHeaderActions();
@@ -129,8 +149,15 @@ export default class BrainOSPlugin extends Plugin {
 
   refreshIntegrations() { this.syncHeaderActions(); }
 
+  private activeGraphView() {
+    const view = this.app.workspace.getActiveViewOfType?.(BrainOSGraphView)
+      ?? this.app.workspace.getMostRecentLeaf?.()?.view;
+    return view instanceof BrainOSGraphView ? view : undefined;
+  }
+
   private syncHeaderActions() {
     if (this.unloading) return;
+    this.syncExplorerEvents();
     this.syncNewTabActions();
     const views = new Set<MarkdownView>();
     this.app.workspace.iterateAllLeaves(leaf => {
@@ -148,6 +175,22 @@ export default class BrainOSPlugin extends Plugin {
     });
     for (const [view, action] of this.headerActions) {
       if (!views.has(view)) { action.remove(); this.headerActions.delete(view); }
+    }
+  }
+
+  private syncExplorerEvents() {
+    const documents = new Set<Document>();
+    if (typeof document !== "undefined") documents.add(document);
+    this.app.workspace.iterateAllLeaves?.(leaf => {
+      const doc = leaf.view.containerEl?.ownerDocument;
+      if (doc) documents.add(doc);
+    });
+    for (const doc of documents) {
+      if (this.explorerDocuments.has(doc)) continue;
+      this.explorerDocuments.add(doc);
+      this.registerDomEvent(doc, "mouseover", event => this.explorer.over(event));
+      this.registerDomEvent(doc, "mouseout", event => this.explorer.out(event));
+      this.registerDomEvent(doc, "click", event => this.explorer.click(event), true);
     }
   }
 
@@ -208,7 +251,9 @@ export default class BrainOSPlugin extends Plugin {
     this.creatingThought = true;
     try {
       const file = await createThought(this.app, title, this.layout.settings.noteFolder);
-      const leaf = targetLeaf?.view.getViewType() === "empty" ? targetLeaf : this.app.workspace.getLeaf("tab");
+      const shared = this.activeGraphView()
+        ?? this.app.workspace.getLeavesOfType(VIEW_TYPE).map(leaf => leaf.view).find(view => view instanceof BrainOSGraphView);
+      const leaf = shared?.leaf ?? (targetLeaf?.view.getViewType() === "empty" ? targetLeaf : this.app.workspace.getLeaf("tab"));
       await this.openMindView(leaf, file);
       await this.app.workspace.revealLeaf(leaf);
       this.refreshViews();

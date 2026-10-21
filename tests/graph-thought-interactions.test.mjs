@@ -501,3 +501,85 @@ test('wheel input leaves the camera unchanged during inline editing',async()=>{
   view.onWheel(wheelEvent({deltaX:24,deltaY:18,wheelDeltaY:-54}));
   assert.deepEqual(view.pan,{x:0,y:0});assert.equal(view.targetZoom,undefined);
 });
+
+async function sharedFixture(){
+  const f=await fixture('- A\n- B\n- C\n','Thoughts/A.md');
+  f.plugin.layout.settings.noteFolder='Thoughts';
+  f.addFile('Thoughts/sub/B.md','- [[Thoughts/A.md|B]]\n- D\n\n---\n\n- [[Thoughts/A.md|C]]\n- [[Thoughts/A.md|A]]\n');
+  f.addFile('Outside.md','- Outside\n');f.addFile('ThoughtsOther/ignored.md','- Ignored\n');
+  f.view.resize=()=>{};f.view.refresh=BrainOSGraphView.prototype.refresh.bind(f.view);
+  await f.view.refresh();return f;
+}
+test('production refresh loads the entire thought folder and retains the camera when switching files',async()=>{
+  const f=await sharedFixture();
+  assert.deepEqual(f.view.nodes.map(node=>node.label).sort(),['A','B','C','D']);assert.equal(f.view.edges.length,4);
+  const original=new Set(f.view.nodes.map(node=>node.path));
+  f.view.zoom=1.7;f.view.pan={x:123,y:-45};
+  const positions=JSON.stringify(f.plugin.layout.positions);
+  await f.view.onLoadFile(f.app.vault.getAbstractFileByPath('Thoughts/sub/B.md'));
+  assert.deepEqual(new Set(f.view.nodes.map(node=>node.path)),original);
+  assert.deepEqual(f.view.pan,{x:123,y:-45});assert.equal(f.view.zoom,1.7);
+  assert.equal(JSON.stringify(f.plugin.layout.positions),positions);
+  assert.equal(f.view.thoughtPath,'Thoughts/sub/B.md');
+});
+test('thought preview highlights the whole chain with exact edge membership and never expands through shared nodes',async()=>{
+  const f=await sharedFixture();
+  f.view.selected=f.key('A');f.view.hovered=f.key('A');
+  f.view.previewThought('Thoughts/A.md');const focus=f.view.activityFocus();
+  assert.equal(focus.focus,undefined);assert.deepEqual([...focus.nodes].sort(),['A','B','C'].map(f.key).sort());
+  assert.equal(focus.edges.size,2);
+  assert.ok([...focus.edges].every(edge=>edge.thoughts.includes('Thoughts/A.md')));
+  const otherEdge=f.view.edges.find(edge=>edge.from===f.key('C')&&edge.to===f.key('A'));
+  assert.ok(focus.nodes.has(otherEdge.from)&&focus.nodes.has(otherEdge.to));assert.ok(!focus.edges.has(otherEdge));
+  const nodes=[...f.view.nodes],edges=[...f.view.edges];
+  f.view.previewThought('Thoughts/sub/B.md');assert.equal(f.view.activityFocus().nodes.size,4);
+  assert.equal(f.view.file.path,'Thoughts/A.md');assert.equal(f.view.thoughtPath,'Thoughts/A.md');
+  assert.deepEqual(f.view.nodes,nodes);assert.deepEqual(f.view.edges,edges);
+  f.view.previewThought();assert.equal(f.view.activityFocus().focus,f.key('A'));
+  f.view.hovered=undefined;f.view.selected=undefined;
+  assert.equal(f.view.activityFocus().thought,'Thoughts/A.md');assert.equal(f.view.activityFocus().nodes.size,3);
+});
+test('new empty thought stays in the shared canvas and hovering another file cannot redirect its first write',async()=>{
+  const f=await sharedFixture(),blank=f.addFile('Thoughts/New.md','');
+  const original=f.content.get(f.file.path);f.view.pan={x:80,y:15};f.view.zoom=0.75;
+  await f.view.onLoadFile(blank);
+  assert.equal(f.view.nodes.length,4);assert.ok(f.view.nodes.every(node=>!node.placeholder));
+  assert.equal(f.view.activityFocus().nodes.size,0);assert.equal(f.view.activityFocus().thought,blank.path);
+  assert.deepEqual(f.view.pan,{x:80,y:15});assert.equal(f.view.zoom,0.75);
+  f.view.previewThought('Thoughts/sub/B.md');await f.view.beginCreate({x:50,y:40});
+  f.view.editor.find('input')[0].value='New node';f.view.editor.requestSubmit();await settle(f.view);
+  assert.equal(f.content.get(blank.path),'- New node\n');assert.equal(f.content.get(f.file.path),original);
+  assert.equal(f.view.nodes.length,5);assert.equal(f.view.file.path,blank.path);
+});
+test('background links cannot be disconnected from a different active thought',async()=>{
+  const f=await sharedFixture(),other=f.view.edges.find(edge=>!edge.thoughts.includes(f.file.path));
+  const before=f.content.get('Thoughts/sub/B.md');await f.view.disconnectEdge(other);
+  assert.equal(f.content.get('Thoughts/sub/B.md'),before);assert.match(globalThis.lastNotice,/其他思考/);
+});
+
+test('active thought uses normal foreground; selection, edge hover and preview use the live theme accent',async()=>{
+  const {view}=await fixture('- A\n- B\n');
+  view.nodes.forEach((node,index)=>{node.x=index*160-80;node.y=0;});
+  view.search={value:''};view.status={setText(){}};view.contentEl.querySelector=()=>null;
+  const paints=[],ctx={setTransform(){},clearRect(){},beginPath(){},arc(){},moveTo(){},lineTo(){},closePath(){},setLineDash(){},
+    fill(){paints.push({kind:'node',color:this.fillStyle});},stroke(){paints.push({kind:'edge',color:this.strokeStyle});},
+    measureText:text=>({width:text.length*8}),fillText(){}};
+  view.canvas.getContext=()=>ctx;
+  const oldWindow=globalThis.window,oldStyle=globalThis.getComputedStyle;
+  const theme={'--text-normal':'#ffffff','--graph-node':'#aaaaaa','--graph-line':'#555555','--graph-node-focused':'#ff0000','--interactive-accent':'#ffcc00'};
+  globalThis.window={devicePixelRatio:1};globalThis.getComputedStyle=()=>({getPropertyValue:name=>theme[name]??''});
+  const render=()=>{paints.length=0;BrainOSGraphView.prototype.draw.call(view);return [...paints];};
+  try{
+    assert.ok(render().every(paint=>paint.color==='#ffffff'));
+    view.selected=view.nodes[0].path;
+    assert.ok(render().some(paint=>paint.kind==='edge'&&paint.color==='#ffcc00'));
+    assert.ok(paints.some(paint=>paint.kind==='node'&&paint.color==='#ffcc00'));
+    assert.ok(paints.every(paint=>paint.color!=='#ff0000'));
+    view.selected=undefined;assert.ok(render().every(paint=>paint.color==='#ffffff'));
+    view.hoveredEdge=view.edges[0];assert.ok(render().some(paint=>paint.kind==='edge'&&paint.color==='#ffcc00'));
+    view.hoveredEdge=undefined;view.previewThought(view.file.path);
+    assert.ok(render().every(paint=>paint.color==='#ffcc00'));
+    theme['--interactive-accent']='#33aaff';assert.ok(render().every(paint=>paint.color==='#33aaff'));
+    view.previewThought();assert.ok(render().every(paint=>paint.color==='#ffffff'));
+  }finally{globalThis.window=oldWindow;globalThis.getComputedStyle=oldStyle;}
+});

@@ -798,7 +798,7 @@ async function removeThoughtNodes(app, owner, selected) {
     return next;
   });
 }
-async function buildThoughtSnapshot(app, thoughtFile, folder) {
+async function buildThoughtSnapshot(app, thoughtFile, folder, activeFile) {
   var _a, _b;
   const nodes = /* @__PURE__ */ new Map(), edges = /* @__PURE__ */ new Map();
   const thoughts = [], steps = [];
@@ -865,30 +865,19 @@ async function buildThoughtSnapshot(app, thoughtFile, folder) {
   };
   for (const file of thoughtFile ? [thoughtFile] : app.vault.getMarkdownFiles()) {
     if (folder !== void 0 && !isThoughtFile(file.path, folder)) continue;
-    const document = await read(file);
+    const document2 = await read(file);
     const marked = ((_b = (_a = app.metadataCache.getFileCache(file)) == null ? void 0 : _a.frontmatter) == null ? void 0 : _b.brainos_type) === "thought-file";
-    if (!thoughtFile && !document.doc.occurrences.length && !document.legacy && !marked) continue;
+    if (!thoughtFile && file.path !== (activeFile == null ? void 0 : activeFile.path) && !document2.doc.occurrences.length && !document2.legacy && !marked) continue;
     thoughts.push({ path: file.path, title: file.basename });
     const keys = /* @__PURE__ */ new Map();
-    for (const node of document.doc.nodes) keys.set(node.id, node.target ? await resolve(file.path, node.target, node.referenceLabel, node.referenceLabel !== void 0) : addNode(file, node, file.path));
-    for (const relation of document.doc.relations) addEdge(file.path, keys.get(relation.from), keys.get(relation.to));
-    for (const visit of document.doc.occurrences) {
+    for (const node of document2.doc.nodes) keys.set(node.id, node.target ? await resolve(file.path, node.target, node.referenceLabel, node.referenceLabel !== void 0) : addNode(file, node, file.path));
+    for (const relation of document2.doc.relations) addEdge(file.path, keys.get(relation.from), keys.get(relation.to));
+    for (const visit of document2.doc.occurrences) {
       const key = keys.get(visit.id);
       if (!key) continue;
       steps.push({ key, title: visit.title, body: visit.body, thoughtPath: file.path, pathIndex: visit.path, ordinal: visit.ordinal });
       for (const link of documentLinks(visit.body)) addEdge(file.path, key, await resolve(file.path, link.target, link.label));
     }
-    if (!thoughtFile && !document.doc.nodes.length) nodes.set("thought:" + file.path, {
-      path: "thought:" + file.path,
-      label: file.basename,
-      openPath: file.path,
-      ownerPath: file.path,
-      x: 0,
-      y: 0,
-      degree: 0,
-      thoughts: [file.path],
-      placeholder: true
-    });
   }
   for (const edge of edges.values()) {
     nodes.get(edge.from).degree++;
@@ -1450,7 +1439,7 @@ var GraphLayout = class {
 // src/graph-options.ts
 function defaultGraphOptions() {
   return {
-    source: "vault",
+    source: "thoughts",
     hiddenPaths: [],
     display: { nodeSizeMultiplier: 1, lineSizeMultiplier: 1, textFadeMultiplier: 0, showArrows: false },
     forces: { center: 1 - Math.log(0.109) / Math.log(0.01), repel: 10, link: 1, distance: 250 },
@@ -1468,7 +1457,7 @@ function loadGraphOptions(value) {
   };
   const bool = (record, key, fallback) => typeof record[key] === "boolean" ? record[key] : fallback;
   return {
-    source: raw.source === "thoughts" ? "thoughts" : "vault",
+    source: raw.source === "vault" ? "vault" : "thoughts",
     hiddenPaths: Array.isArray(raw.hiddenPaths) ? raw.hiddenPaths.filter((path) => typeof path === "string") : [],
     display: {
       nodeSizeMultiplier: number(display, "nodeSizeMultiplier", 1, 0.25, 3),
@@ -1832,6 +1821,7 @@ var BrainOSGraphView = class extends import_obsidian6.FileView {
     __publicField(this, "nodes", []);
     __publicField(this, "edges", []);
     __publicField(this, "thoughtPath", "");
+    __publicField(this, "previewedThoughtPath");
     __publicField(this, "zoom", 1);
     __publicField(this, "pan", { x: 0, y: 0 });
     __publicField(this, "selected");
@@ -1904,7 +1894,7 @@ var BrainOSGraphView = class extends import_obsidian6.FileView {
     this.selected = void 0;
     this.selectedNodes.clear();
     this.hovered = void 0;
-    this.restoreViewport();
+    if (this.currentViewportKey !== this.viewportKey()) this.restoreViewport();
     if (this.canvas) await this.refresh();
   }
   async onUnloadFile() {
@@ -2019,7 +2009,7 @@ var BrainOSGraphView = class extends import_obsidian6.FileView {
       var _a2, _b, _c;
       return { path: file.path, title: String((_c = (_b = (_a2 = this.app.metadataCache.getFileCache(file)) == null ? void 0 : _a2.frontmatter) == null ? void 0 : _b.title) != null ? _c : file.basename) };
     });
-    const snapshot = this.source === "vault" ? buildVaultSnapshot(this.app, thoughts, this.plugin.layout.graph.filter, this.plugin.layout.settings.noteFolder) : await buildThoughtSnapshot(this.app, (_a = this.file) != null ? _a : void 0, this.plugin.layout.settings.noteFolder);
+    const snapshot = this.source === "vault" ? buildVaultSnapshot(this.app, thoughts, this.plugin.layout.graph.filter, this.plugin.layout.settings.noteFolder) : await buildThoughtSnapshot(this.app, void 0, this.plugin.layout.settings.noteFolder, (_a = this.file) != null ? _a : void 0);
     if (this.closed || revision !== this.refreshRevision) return;
     this.snapshot = snapshot;
     this.forceLayout.configure(graphForces(this.plugin.layout.graph));
@@ -2033,7 +2023,7 @@ var BrainOSGraphView = class extends import_obsidian6.FileView {
   }
   filterSnapshot() {
     var _a, _b;
-    const base = this.source === "thoughts" && this.thoughtPath ? { ...this.snapshot, nodes: this.snapshot.nodes.filter((node) => node.thoughts.includes(this.thoughtPath)), edges: this.snapshot.edges.filter((edge) => edge.thoughts.includes(this.thoughtPath)) } : this.snapshot;
+    const base = this.snapshot;
     const visible = { ...base, nodes: base.nodes.filter((node) => !this.plugin.layout.graph.hiddenPaths.includes(node.path)) };
     const result = selectGraph(visible, (_b = (_a = this.search) == null ? void 0 : _a.value.trim()) != null ? _b : "", this.plugin.layout.graph.filter, this.localCenter);
     this.nodes = this.draftNode ? result.nodes.filter((node) => !node.placeholder) : result.nodes;
@@ -2052,6 +2042,23 @@ var BrainOSGraphView = class extends import_obsidian6.FileView {
     this.forceLayout.sync(this.nodes, this.edges, this.plugin.layout.positions);
     this.forceLayout.setSelected(this.selected);
     this.startLayoutAnimation();
+  }
+  previewThought(path) {
+    if (this.previewedThoughtPath === path) return;
+    this.previewedThoughtPath = path;
+    if (this.canvas && !this.closed) this.draw();
+  }
+  /** File preview is visual only: it never changes the editing destination or topology. */
+  activityFocus() {
+    var _a, _b, _c;
+    const focus = this.previewedThoughtPath ? void 0 : (_a = this.hovered) != null ? _a : this.selected;
+    const thought = this.source === "thoughts" && !((_b = this.search) == null ? void 0 : _b.value.trim()) && !focus ? (_c = this.previewedThoughtPath) != null ? _c : this.thoughtPath : void 0;
+    return {
+      focus,
+      thought,
+      nodes: new Set(thought ? this.nodes.filter((node) => node.thoughts.includes(thought)).map((node) => node.path) : []),
+      edges: new Set(thought ? this.edges.filter((edge) => edge.thoughts.includes(thought)) : [])
+    };
   }
   toggleSearch(show = ((_b) => (_b = ((_a) => (_a = this.searchBox) == null ? void 0 : _a.hidden)()) != null ? _b : true)()) {
     var _a2;
@@ -2135,7 +2142,6 @@ var BrainOSGraphView = class extends import_obsidian6.FileView {
           this.thoughtPath = value;
           this.selectedNodes.clear();
           this.selected = void 0;
-          this.restoreViewport();
           this.filterSnapshot();
           this.draw();
         }));
@@ -2239,12 +2245,12 @@ var BrainOSGraphView = class extends import_obsidian6.FileView {
     if (changed) void this.plugin.saveLayout();
   }
   viewportKey() {
-    return this.file ? `file:${this.file.path}` : this.thoughtPath || "__all__";
+    return this.source === "thoughts" ? `thoughts:${this.plugin.layout.settings.noteFolder}` : "__all__";
   }
   restoreViewport() {
-    var _a;
+    var _a, _b, _c;
     this.currentViewportKey = this.viewportKey();
-    const saved = (_a = this.plugin.layout.viewports) == null ? void 0 : _a[this.viewportKey()];
+    const saved = (_c = (_a = this.plugin.layout.viewports) == null ? void 0 : _a[this.viewportKey()]) != null ? _c : this.file ? (_b = this.plugin.layout.viewports) == null ? void 0 : _b[`file:${this.file.path}`] : void 0;
     if (!saved || !Number.isFinite(saved.x) || !Number.isFinite(saved.y) || !Number.isFinite(saved.zoom)) {
       this.pan = { x: 0, y: 0 };
       this.zoom = 1;
@@ -2354,8 +2360,9 @@ var BrainOSGraphView = class extends import_obsidian6.FileView {
     };
     const edgeColor = color("--graph-line", "--brainos-edge", "--background-modifier-border");
     const fill = color("--graph-node", "--text-muted");
-    const focusedFill = color("--graph-node-focused", "--text-accent", "--interactive-accent");
     const accent = color("--interactive-accent", "--text-accent");
+    const focusedFill = accent;
+    const normal = color("--text-normal", "--graph-text");
     const text = color("--graph-text", "--text-normal");
     const dim = color("--graph-node-unresolved", "--text-faint");
     const typeColors = {
@@ -2369,7 +2376,8 @@ var BrainOSGraphView = class extends import_obsidian6.FileView {
     const query = this.search.value.trim().toLocaleLowerCase();
     const matches = new Set(query ? this.nodes.filter((node) => node.label.toLocaleLowerCase().includes(query) || node.path.toLocaleLowerCase().includes(query)).map((node) => node.path) : []);
     const byPath = new Map(this.nodes.map((node) => [node.path, node]));
-    const focus = this.hovered && byPath.has(this.hovered) ? this.hovered : this.selected;
+    const activity = this.activityFocus();
+    const focus = activity.focus && byPath.has(activity.focus) ? activity.focus : void 0;
     const neighbors = /* @__PURE__ */ new Set();
     if (focus) for (const edge of this.edges) {
       if (edge.from === focus) neighbors.add(edge.to);
@@ -2405,16 +2413,16 @@ var BrainOSGraphView = class extends import_obsidian6.FileView {
       const p = points.get(edge.from), q = points.get(edge.to);
       if (!a || !b || !p || !q || edge.from === edge.to) continue;
       const edgeSelected = !!this.hoveredEdge && edgeStrokeKey(edge.from, edge.to) === edgeStrokeKey(this.hoveredEdge.from, this.hoveredEdge.to);
-      const edgeActive = edgeSelected || edge.from === focus || edge.to === focus;
-      const strokeKey = edgeStrokeKey(edge.from, edge.to);
-      const alpha = opacity("e:" + strokeKey, !focus || edgeActive ? 1 : 0.2);
+      const edgeActive = edgeSelected || edge.from === focus || edge.to === focus || activity.edges.has(edge);
+      const edgeHighlighted = edgeSelected || edge.from === focus || edge.to === focus || !!this.previewedThoughtPath && activity.edges.has(edge);
+      const alpha = opacity("e:" + JSON.stringify([edge.from, edge.to]), !(focus || activity.thought) || edgeActive ? 1 : 0.2);
       if (!edgeInViewport(p, q, width, height, options.lineSizeMultiplier + 2)) continue;
       const dx = q.x - p.x, dy = q.y - p.y, distance = Math.hypot(dx, dy);
       if (!Number.isFinite(distance) || distance < 1e-3) continue;
       const ux = dx / distance, uy = dy / distance;
       const sourceRadius = radii.get(a.path), targetRadius = radii.get(b.path);
       ctx.globalAlpha = alpha;
-      ctx.strokeStyle = edgeActive ? accent : edgeColor;
+      ctx.strokeStyle = edgeHighlighted ? accent : activity.edges.has(edge) ? normal : edgeColor;
       ctx.lineWidth = Math.max(0.1, options.lineSizeMultiplier) + (edgeSelected ? 2 : 0);
       const lane = directions.has(JSON.stringify([edge.to, edge.from])) ? 3 : 0;
       if (distance > sourceRadius + targetRadius) {
@@ -2431,7 +2439,7 @@ var BrainOSGraphView = class extends import_obsidian6.FileView {
       if (options.showArrows && distance > sourceRadius + targetRadius + 10) {
         const arrowAlpha = Math.max(0, Math.min(1, 2 * (zoom - 0.3)));
         ctx.globalAlpha = alpha * arrowAlpha * 0.5;
-        ctx.fillStyle = text;
+        ctx.fillStyle = edgeHighlighted ? accent : activity.edges.has(edge) ? normal : text;
         const tipX = q.x - ux * (targetRadius + 1), tipY = q.y - uy * (targetRadius + 1);
         const size = 8 * Math.sqrt(Math.max(0.1, options.lineSizeMultiplier));
         ctx.beginPath();
@@ -2463,7 +2471,8 @@ var BrainOSGraphView = class extends import_obsidian6.FileView {
       const point = points.get(node.path), radius = radii.get(node.path);
       if (!Number.isFinite(point.x) || !Number.isFinite(point.y)) continue;
       const isFocus = node.path === focus, isMatch = matches.has(node.path);
-      const alpha = opacity("n:" + node.path, !focus || isFocus || neighbors.has(node.path) ? 1 : 0.2);
+      const inThought = activity.nodes.has(node.path);
+      const alpha = opacity("n:" + node.path, !(focus || activity.thought) || isFocus || neighbors.has(node.path) || inThought ? 1 : 0.2);
       const kind = (_b = node.kind) != null ? _b : "note";
       const circleVisible = intersectsViewport({
         left: point.x - radius - 3,
@@ -2473,7 +2482,8 @@ var BrainOSGraphView = class extends import_obsidian6.FileView {
       }, width, height);
       if (circleVisible) {
         ctx.globalAlpha = alpha * (kind === "unresolved" || node.placeholder ? 0.5 : 1);
-        ctx.fillStyle = isFocus ? accent : node.path === this.selected || this.selectedNodes.has(node.path) ? focusedFill : isMatch ? focusedFill : node.placeholder ? dim : typeColors[kind];
+        const highlighted = isFocus || this.selectedNodes.has(node.path) || node.path === this.selected || isMatch || !!this.previewedThoughtPath && inThought;
+        ctx.fillStyle = highlighted ? accent : inThought ? normal : node.placeholder ? dim : typeColors[kind];
         ctx.beginPath();
         ctx.arc(point.x, point.y, radius, 0, Math.PI * 2);
         ctx.fill();
@@ -3292,6 +3302,10 @@ var BrainOSGraphView = class extends import_obsidian6.FileView {
       new import_obsidian6.Notice("\u8FDE\u7EBF\u5C5E\u4E8E\u591A\u4E2A\u601D\u8003\uFF0C\u8BF7\u5148\u9009\u62E9\u8981\u4FEE\u6539\u7684\u601D\u8003");
       return;
     }
+    if (this.source !== "vault" && !edge.thoughts.includes(thought)) {
+      new import_obsidian6.Notice("\u6B64\u8FDE\u7EBF\u5C5E\u4E8E\u5176\u4ED6\u601D\u8003\uFF0C\u8BF7\u5148\u5728\u4FA7\u680F\u9009\u62E9\u5BF9\u5E94\u6587\u4EF6");
+      return;
+    }
     await this.runEdit(async () => {
       if (this.source === "vault") {
         const directions = this.edges.filter((value) => edgeStrokeKey(value.from, value.to) === edgeStrokeKey(edge.from, edge.to));
@@ -3418,8 +3432,43 @@ var FolderSuggest = class extends import_obsidian7.AbstractInputSuggest {
   }
 };
 
+// src/thought-explorer.ts
+var ThoughtExplorer = class {
+  constructor(callbacks) {
+    this.callbacks = callbacks;
+    __publicField(this, "hoveredPath");
+  }
+  path(target) {
+    var _a;
+    const element = target;
+    const row = (_a = element == null ? void 0 : element.closest) == null ? void 0 : _a.call(element, ".nav-file-title[data-path], .nav-file[data-path]");
+    if (!(row == null ? void 0 : row.closest(".workspace-leaf-content[data-type='file-explorer']"))) return;
+    const path = row.getAttribute("data-path");
+    return path && this.callbacks.accepts(path) ? path : void 0;
+  }
+  over(event) {
+    const path = this.path(event.target);
+    if (!path || path === this.hoveredPath) return;
+    this.hoveredPath = path;
+    this.callbacks.preview(path);
+  }
+  out(event) {
+    const path = this.path(event.relatedTarget);
+    if (path === this.hoveredPath) return;
+    this.hoveredPath = path;
+    this.callbacks.preview(path);
+  }
+  click(event) {
+    if (event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+    const path = this.path(event.target);
+    if (!path || !this.callbacks.select(path)) return;
+    event.preventDefault();
+    event.stopPropagation();
+  }
+};
+
 // src/main.ts
-var DATA_VERSION = 5;
+var DATA_VERSION = 6;
 var DEFAULT_SETTINGS = { noteFolder: DEFAULT_NOTE_FOLDER };
 var BrainOSPlugin = class extends import_obsidian8.Plugin {
   constructor() {
@@ -3441,9 +3490,25 @@ var BrainOSPlugin = class extends import_obsidian8.Plugin {
     __publicField(this, "newTabActions", /* @__PURE__ */ new Map());
     __publicField(this, "unloading", false);
     __publicField(this, "creatingThought", false);
+    __publicField(this, "explorerDocuments", /* @__PURE__ */ new WeakSet());
+    __publicField(this, "explorer", new ThoughtExplorer({
+      accepts: (path) => isThoughtFile(path, this.layout.settings.noteFolder) && this.app.vault.getAbstractFileByPath(path) instanceof import_obsidian8.TFile,
+      preview: (path) => {
+        for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE)) {
+          if (leaf.view instanceof BrainOSGraphView) leaf.view.previewThought(path);
+        }
+      },
+      select: (path) => {
+        const view = this.activeGraphView();
+        const file = this.app.vault.getAbstractFileByPath(path);
+        if (!view || !(file instanceof import_obsidian8.TFile)) return false;
+        void this.openMindView(view.leaf, file);
+        return true;
+      }
+    }));
   }
   async onload() {
-    var _a, _b;
+    var _a, _b, _c;
     const saved = await this.loadData();
     const savedPositions = isRecord(saved == null ? void 0 : saved.positions) ? Object.fromEntries(Object.entries(saved.positions).filter(([, point]) => isPoint(point))) : {};
     const savedViewports = isRecord(saved == null ? void 0 : saved.viewports) ? Object.fromEntries(Object.entries(saved.viewports).filter(([, viewport]) => isViewport(viewport))) : {};
@@ -3457,6 +3522,7 @@ var BrainOSPlugin = class extends import_obsidian8.Plugin {
       graph: loadGraphOptions(saved == null ? void 0 : saved.graph)
     };
     this.lastMarkdownPath = (_b = this.app.workspace.getActiveFile()) == null ? void 0 : _b.path;
+    if (((_c = saved == null ? void 0 : saved.version) != null ? _c : 0) < DATA_VERSION) this.layout.graph.source = "thoughts";
     this.registerEvent(this.app.workspace.on("file-open", (file) => {
       if ((file == null ? void 0 : file.extension) === "md") this.lastMarkdownPath = file.path;
       this.syncHeaderActions();
@@ -3518,8 +3584,14 @@ var BrainOSPlugin = class extends import_obsidian8.Plugin {
   refreshIntegrations() {
     this.syncHeaderActions();
   }
+  activeGraphView() {
+    var _a, _b, _c, _d, _e, _f;
+    const view = (_f = (_b = (_a = this.app.workspace).getActiveViewOfType) == null ? void 0 : _b.call(_a, BrainOSGraphView)) != null ? _f : (_e = (_d = (_c = this.app.workspace).getMostRecentLeaf) == null ? void 0 : _d.call(_c)) == null ? void 0 : _e.view;
+    return view instanceof BrainOSGraphView ? view : void 0;
+  }
   syncHeaderActions() {
     if (this.unloading) return;
+    this.syncExplorerEvents();
     this.syncNewTabActions();
     const views = /* @__PURE__ */ new Set();
     this.app.workspace.iterateAllLeaves((leaf) => {
@@ -3540,6 +3612,23 @@ var BrainOSPlugin = class extends import_obsidian8.Plugin {
         action.remove();
         this.headerActions.delete(view);
       }
+    }
+  }
+  syncExplorerEvents() {
+    var _a, _b;
+    const documents = /* @__PURE__ */ new Set();
+    if (typeof document !== "undefined") documents.add(document);
+    (_b = (_a = this.app.workspace).iterateAllLeaves) == null ? void 0 : _b.call(_a, (leaf) => {
+      var _a2;
+      const doc = (_a2 = leaf.view.containerEl) == null ? void 0 : _a2.ownerDocument;
+      if (doc) documents.add(doc);
+    });
+    for (const doc of documents) {
+      if (this.explorerDocuments.has(doc)) continue;
+      this.explorerDocuments.add(doc);
+      this.registerDomEvent(doc, "mouseover", (event) => this.explorer.over(event));
+      this.registerDomEvent(doc, "mouseout", (event) => this.explorer.out(event));
+      this.registerDomEvent(doc, "click", (event) => this.explorer.click(event), true);
     }
   }
   syncNewTabActions() {
@@ -3601,11 +3690,13 @@ var BrainOSPlugin = class extends import_obsidian8.Plugin {
     await this.activateView();
   }
   async createNewThought(title = "\u672A\u547D\u540D\u601D\u8003", targetLeaf) {
+    var _a, _b;
     if (this.creatingThought) return false;
     this.creatingThought = true;
     try {
       const file = await createThought(this.app, title, this.layout.settings.noteFolder);
-      const leaf = (targetLeaf == null ? void 0 : targetLeaf.view.getViewType()) === "empty" ? targetLeaf : this.app.workspace.getLeaf("tab");
+      const shared = (_a = this.activeGraphView()) != null ? _a : this.app.workspace.getLeavesOfType(VIEW_TYPE).map((leaf2) => leaf2.view).find((view) => view instanceof BrainOSGraphView);
+      const leaf = (_b = shared == null ? void 0 : shared.leaf) != null ? _b : (targetLeaf == null ? void 0 : targetLeaf.view.getViewType()) === "empty" ? targetLeaf : this.app.workspace.getLeaf("tab");
       await this.openMindView(leaf, file);
       await this.app.workspace.revealLeaf(leaf);
       this.refreshViews();

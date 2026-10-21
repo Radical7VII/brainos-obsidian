@@ -3,12 +3,12 @@ import test from 'node:test';
 import {build} from 'esbuild';
 import {installNativeFileManager} from './native-file-manager.mjs';
 const bundled=await build({
-  stdin:{contents:'export {default as BrainOSPlugin} from "./src/main";export {Modal,TFile,TFolder,MarkdownView,Setting} from "obsidian";',resolveDir:process.cwd()},
+  stdin:{contents:'export {default as BrainOSPlugin} from "./src/main";export {BrainOSGraphView} from "./src/graph-view";export {Modal,TFile,TFolder,MarkdownView,Setting} from "obsidian";',resolveDir:process.cwd()},
   bundle:true,write:false,format:'esm',platform:'node',logLevel:'silent',plugins:[{name:'obsidian-test',setup(b){
-    b.onResolve({filter:/^\.\/graph-view$/},()=>({path:'graph',namespace:'mock'}));
+    b.onResolve({filter:/^\.\/(?:src\/)?graph-view$/},()=>({path:'graph',namespace:'mock'}));
     b.onResolve({filter:/^obsidian$/},()=>({path:'obsidian',namespace:'mock'}));
     b.onLoad({filter:/.*/,namespace:'mock'},args=>({loader:'js',contents:args.path==='graph'?`
-      export const VIEW_TYPE='brainos-graph-view';export class BrainOSGraphView {}
+      export const VIEW_TYPE='brainos-graph-view';export class BrainOSGraphView {getViewType(){return VIEW_TYPE;}}
     `:`
       export class AbstractInputSuggest{constructor(app,input){this.input=input;}setValue(value){this.input.value=value;}close(){}}
       export class TFolder{constructor(path){this.path=path;}}
@@ -30,7 +30,7 @@ const bundled=await build({
     `}));
   }}],
 });
-const {BrainOSPlugin,TFile,TFolder,Modal,MarkdownView,Setting}=await import('data:text/javascript;base64,'+Buffer.from(bundled.outputFiles[0].text).toString('base64'));
+const {BrainOSPlugin,BrainOSGraphView,TFile,TFolder,Modal,MarkdownView,Setting}=await import('data:text/javascript;base64,'+Buffer.from(bundled.outputFiles[0].text).toString('base64'));
 function fixture(){
   const files=new Map(),states=[];let tabs=0;
   const leaf={view:{getViewType:()=> 'empty'},setViewState:async state=>states.push(state)};
@@ -174,4 +174,37 @@ test('editable thought directory suggests existing folders, filters paths and pe
   assert.equal(saved.settings.noteFolder,'BrainOS/子目录');
   suggest.selectSuggestion('/',{});await new Promise(resolve=>setImmediate(resolve));assert.equal(saved.settings.noteFolder,'');
   tab.hide();assert.deepEqual(suggest.getSuggestions(''),[]);
+});
+
+test('new thoughts reuse the existing graph leaf instead of opening another canvas',async()=>{
+  const f=fixture(),view=new BrainOSGraphView(),states=[];
+  const leaf={view,setViewState:async state=>states.push(state)};view.leaf=leaf;
+  f.plugin.app.workspace.getActiveViewOfType=()=>view;
+  f.plugin.app.workspace.getLeavesOfType=type=>type==='brainos-graph-view'?[leaf]:[];
+  f.plugin.refreshViews=()=>{};
+  await f.plugin.createNewThought('New');
+  assert.equal(f.tabs,0);assert.equal(f.files.get('New.md').text,'');
+  assert.deepEqual(states,[{type:'brainos-graph-view',state:{file:'New.md'},active:true}]);
+});
+test('native sidebar event wiring works in multiple documents and does not duplicate on layout updates',async()=>{
+  const f=fixture(),doc={},popout={},handlers=[];const view=new BrainOSGraphView(),previews=[];
+  const leaf={view,setViewState:async state=>f.states.push(state)};view.leaf=leaf;view.containerEl={ownerDocument:doc};view.previewThought=path=>previews.push(path);
+  f.plugin.app.workspace.iterateAllLeaves=callback=>[leaf,{view:{containerEl:{ownerDocument:popout}}}].forEach(callback);
+  f.plugin.app.workspace.getLeavesOfType=type=>type==='brainos-graph-view'?[leaf]:[];
+  f.plugin.app.workspace.getActiveViewOfType=()=>null;f.plugin.app.workspace.getMostRecentLeaf=()=>leaf;
+  f.plugin.registerDomEvent=(doc,type,callback,capture)=>handlers.push({doc,type,callback,capture});
+  f.plugin.syncExplorerEvents();f.plugin.syncExplorerEvents();assert.equal(handlers.length,6);
+  const file=new TFile('A.md');f.files.set(file.path,file);
+  const row={getAttribute:()=>file.path,closest:()=>({})},target={closest:()=>row};
+  handlers.find(h=>h.doc===doc&&h.type==='mouseover').callback({target});assert.deepEqual(previews,['A.md']);
+  const click={target,button:0,preventDefault(){this.prevented=true;},stopPropagation(){}};
+  handlers.find(h=>h.doc===doc&&h.type==='click').callback(click);
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(click.prevented,true);assert.equal(f.states[0].state.file,'A.md');assert.equal(f.tabs,0);
+  handlers.find(h=>h.doc===doc&&h.type==='mouseout').callback({relatedTarget:null});assert.deepEqual(previews,['A.md',undefined]);
+});
+test('shared canvas migration keeps positions, settings and sessions while opting into thought nodes',async()=>{
+  const f=fixture();f.plugin.loadData=async()=>({version:5,settings:{noteFolder:'Thoughts'},positions:{a:{x:10,y:20}},sessions:[{id:'old',stepKeys:[]}],graph:{source:'vault'}});
+  await f.plugin.onload();assert.equal(f.plugin.layout.graph.source,'thoughts');
+  assert.deepEqual(f.plugin.layout.positions,{a:{x:10,y:20}});assert.equal(f.plugin.layout.settings.noteFolder,'Thoughts');assert.equal(f.plugin.layout.sessions[0].id,'old');
 });
