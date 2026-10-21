@@ -931,7 +931,7 @@ async function createThought(app, title, folder) {
 }
 
 // layout-worker:/Users/othnielsu/Documents/repo/brainos-obsidian/src/layout-worker.ts
-var layout_worker_default = '"use strict";\n(() => {\n  var __defProp = Object.defineProperty;\n  var __defNormalProp = (obj, key, value) => key in obj ? __defProp(obj, key, { enumerable: true, configurable: true, writable: true, value }) : obj[key] = value;\n  var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "symbol" ? key + "" : key, value);\n\n  // src/force-layout.ts\n  var DEFAULT_FORCE_OPTIONS = Object.freeze({\n    centerStrength: 0.1,\n    repelStrength: 1e3,\n    linkStrength: 1,\n    linkDistance: 250\n  });\n  var _ForceLayout = class _ForceLayout {\n    constructor(options = {}) {\n      __publicField(this, "particles", []);\n      __publicField(this, "byId", /* @__PURE__ */ new Map());\n      __publicField(this, "links", []);\n      __publicField(this, "topology", "");\n      __publicField(this, "alpha", 0);\n      __publicField(this, "alphaTarget", 0);\n      __publicField(this, "options", { ...DEFAULT_FORCE_OPTIONS });\n      this.configure(options);\n    }\n    configure(options) {\n      const next = { ...this.options };\n      for (const key of Object.keys(next)) {\n        const value = options[key];\n        if (value !== void 0 && Number.isFinite(value)) {\n          next[key] = key === "linkDistance" ? clamp(value, 1, 1e4) : clamp(value, 0, key === "repelStrength" ? 1e6 : 10);\n        }\n      }\n      const changed = Object.keys(next).some((key) => next[key] !== this.options[key]);\n      this.options = next;\n      if (changed) this.reheat(0.3);\n    }\n    reset() {\n      this.particles = [];\n      this.byId.clear();\n      this.links = [];\n      this.topology = "";\n      this.alpha = 0;\n      this.alphaTarget = 0;\n    }\n    sync(nodes2, edges, saved) {\n      var _a;\n      const ids = [...new Set(nodes2.map((node) => node.path))].sort();\n      const idSet = new Set(ids);\n      const uniqueEdges = /* @__PURE__ */ new Map();\n      for (const edge of edges) {\n        if (edge.from !== edge.to && idSet.has(edge.from) && idSet.has(edge.to)) uniqueEdges.set(JSON.stringify([edge.from, edge.to]), edge);\n      }\n      const sortedEdges = [...uniqueEdges.entries()].sort(([a], [b]) => a.localeCompare(b));\n      const topology = JSON.stringify([ids, sortedEdges.map(([key]) => key)]);\n      const changed = topology !== this.topology;\n      const firstGraph = this.particles.length === 0;\n      this.topology = topology;\n      for (const id of this.byId.keys()) if (!idSet.has(id)) this.byId.delete(id);\n      const nodeById = new Map(nodes2.map((node) => [node.path, node]));\n      const adjacency = /* @__PURE__ */ new Map();\n      for (const [, edge] of sortedEdges) {\n        if (!adjacency.has(edge.from)) adjacency.set(edge.from, []);\n        if (!adjacency.has(edge.to)) adjacency.set(edge.to, []);\n        adjacency.get(edge.from).push(edge.to);\n        adjacency.get(edge.to).push(edge.from);\n      }\n      const added = [];\n      for (const [index, id] of ids.entries()) {\n        if (this.byId.has(id)) continue;\n        const stored = saved[id];\n        const original = nodeById.get(id);\n        const explicit = validPoint(stored) ? stored : validPoint(original) && (original.x !== 0 || original.y !== 0) ? original : void 0;\n        const point = explicit != null ? explicit : seedPoint(id, index, ids.length);\n        this.byId.set(id, { id, index, x: point.x, y: point.y, vx: 0, vy: 0, degree: 0 });\n        if (!explicit) added.push(id);\n      }\n      const newSet = new Set(added);\n      for (const id of added) {\n        const neighbors = ((_a = adjacency.get(id)) != null ? _a : []).filter((other) => !newSet.has(other)).map((other) => this.byId.get(other));\n        if (!neighbors.length) continue;\n        const angle = hash(id) / 4294967296 * Math.PI * 2;\n        const point = this.byId.get(id);\n        const radius = 40 + hash(id + "radius") % 40;\n        point.x = neighbors.reduce((sum, node) => sum + node.x, 0) / neighbors.length + Math.cos(angle) * radius;\n        point.y = neighbors.reduce((sum, node) => sum + node.y, 0) / neighbors.length + Math.sin(angle) * radius;\n      }\n      this.particles = ids.map((id, index) => {\n        const particle = this.byId.get(id);\n        particle.index = index;\n        particle.degree = 0;\n        return particle;\n      });\n      for (const [, edge] of sortedEdges) {\n        this.byId.get(edge.from).degree++;\n        this.byId.get(edge.to).degree++;\n      }\n      this.links = sortedEdges.map(([, edge]) => {\n        const source = this.byId.get(edge.from), target = this.byId.get(edge.to);\n        return { source, target, bias: source.degree / (source.degree + target.degree), strength: 1 / Math.min(source.degree, target.degree) };\n      });\n      this.alphaTarget = this.particles.some((particle) => particle.fixed) ? 0.3 : 0;\n      if (!this.particles.length) this.alpha = 0;\n      else if (changed) this.reheat(firstGraph ? 1 : 0.3);\n      this.copyToNodes(nodes2);\n    }\n    /** Selection affects rendering only; it must not attract the whole graph. */\n    setSelected(_path) {\n    }\n    pin(path, position) {\n      const particle = this.byId.get(path);\n      if (!particle || !validPoint(position)) return;\n      particle.fixed = { ...position };\n      particle.x = position.x;\n      particle.y = position.y;\n      particle.vx = 0;\n      particle.vy = 0;\n      this.alphaTarget = 0.3;\n      this.reheat(0.3);\n    }\n    movePinned(path, position) {\n      const particle = this.byId.get(path);\n      if (!(particle == null ? void 0 : particle.fixed) || !validPoint(position)) return;\n      particle.fixed = { ...position };\n      particle.x = position.x;\n      particle.y = position.y;\n      particle.vx = 0;\n      particle.vy = 0;\n      this.alphaTarget = 0.3;\n      this.reheat(0.3);\n    }\n    unpin(path) {\n      const particle = this.byId.get(path);\n      if (!(particle == null ? void 0 : particle.fixed)) return;\n      particle.fixed = void 0;\n      particle.vx = 0;\n      particle.vy = 0;\n      this.alphaTarget = this.particles.some((node) => node.fixed) ? 0.3 : 0;\n      this.reheat(0.3);\n    }\n    reheat(alpha = 0.3) {\n      this.alpha = Math.max(this.alpha, clamp(finite(alpha, 0.3), 0, 1));\n    }\n    tick(nodes2) {\n      if (!this.isRunning) {\n        this.copyToNodes(nodes2);\n        return false;\n      }\n      this.alpha += (this.alphaTarget - this.alpha) * _ForceLayout.alphaDecay;\n      const center = this.options.centerStrength * this.alpha;\n      for (const particle of this.particles) {\n        particle.vx -= particle.x * center;\n        particle.vy -= particle.y * center;\n      }\n      for (const link of this.links) {\n        const a = link.source, b = link.target;\n        let dx = b.x + b.vx - a.x - a.vx, dy = b.y + b.vy - a.y - a.vy;\n        if (dx === 0 && dy === 0) {\n          const unit = direction(a.id, b.id);\n          dx = unit.x * 0.1;\n          dy = unit.y * 0.1;\n        }\n        const length = Math.hypot(dx, dy);\n        const factor = (length - this.options.linkDistance) / length * this.alpha * this.options.linkStrength * link.strength;\n        dx *= factor;\n        dy *= factor;\n        b.vx -= dx * link.bias;\n        b.vy -= dy * link.bias;\n        a.vx += dx * (1 - link.bias);\n        a.vy += dy * (1 - link.bias);\n      }\n      if (this.particles.length > 1 && this.options.repelStrength > 0) {\n        const tree = buildTree(this.particles);\n        const strength = this.options.repelStrength * this.alpha;\n        for (const particle of this.particles) this.repulse(particle, tree, strength);\n      }\n      this.collide();\n      for (const particle of this.particles) {\n        if (particle.fixed) {\n          particle.x = particle.fixed.x;\n          particle.y = particle.fixed.y;\n          particle.vx = 0;\n          particle.vy = 0;\n        } else {\n          particle.vx *= _ForceLayout.damping;\n          particle.vy *= _ForceLayout.damping;\n          particle.x += particle.vx;\n          particle.y += particle.vy;\n          if (!Number.isFinite(particle.x) || !Number.isFinite(particle.y) || Math.abs(particle.x) > 1e7 || Math.abs(particle.y) > 1e7) {\n            const seed = seedPoint(particle.id, particle.index, this.particles.length);\n            particle.x = seed.x;\n            particle.y = seed.y;\n            particle.vx = 0;\n            particle.vy = 0;\n          }\n        }\n      }\n      if (this.alphaTarget === 0 && this.alpha < _ForceLayout.alphaMin) this.alpha = 0;\n      this.copyToNodes(nodes2);\n      return this.isRunning;\n    }\n    snapshot() {\n      return Object.fromEntries(this.particles.map((particle) => [particle.id, { x: particle.x, y: particle.y }]));\n    }\n    get isRunning() {\n      return this.particles.length > 0 && (this.alpha >= _ForceLayout.alphaMin || this.alphaTarget > 0);\n    }\n    copyToNodes(nodes2) {\n      for (const node of nodes2) {\n        const point = this.byId.get(node.path);\n        if (point) {\n          node.x = point.x;\n          node.y = point.y;\n        }\n      }\n    }\n    repulse(particle, quad, strength) {\n      var _a;\n      if (!quad.count) return;\n      let dx = particle.x - quad.cx, dy = particle.y - quad.cy;\n      let squared = dx * dx + dy * dy;\n      const contains = particle.x >= quad.x && particle.x <= quad.x + quad.width && particle.y >= quad.y && particle.y <= quad.y + quad.width;\n      if (quad.children && !contains && quad.width * quad.width < _ForceLayout.thetaSquared * squared) {\n        const factor = strength * quad.count / Math.max(1, squared);\n        particle.vx += dx * factor;\n        particle.vy += dy * factor;\n      } else if (quad.children) {\n        for (const child of quad.children) this.repulse(particle, child, strength);\n      } else {\n        for (const other of (_a = quad.points) != null ? _a : []) {\n          if (other === particle) continue;\n          dx = particle.x - other.x;\n          dy = particle.y - other.y;\n          squared = dx * dx + dy * dy;\n          if (squared < 1e-12) {\n            const unit = direction(other.id, particle.id);\n            dx = unit.x;\n            dy = unit.y;\n            squared = 1;\n          }\n          const factor = strength / Math.max(1, squared);\n          particle.vx += dx * factor;\n          particle.vy += dy * factor;\n        }\n      }\n    }\n    /** Predicted-position uniform buckets avoid an all-pairs collision pass. */\n    collide() {\n      var _a, _b;\n      const distance = _ForceLayout.collisionDistance;\n      const buckets = /* @__PURE__ */ new Map();\n      const predicted = this.particles.map((node) => ({ x: node.x + node.vx, y: node.y + node.vy }));\n      for (const particle of this.particles) {\n        const point = predicted[particle.index];\n        const key = `${Math.floor(point.x / distance)},${Math.floor(point.y / distance)}`;\n        const bucket = (_a = buckets.get(key)) != null ? _a : [];\n        bucket.push(particle);\n        buckets.set(key, bucket);\n      }\n      for (const particle of this.particles) {\n        const point = predicted[particle.index], cellX = Math.floor(point.x / distance), cellY = Math.floor(point.y / distance);\n        for (let x = cellX - 1; x <= cellX + 1; x++) for (let y = cellY - 1; y <= cellY + 1; y++) {\n          for (const other of (_b = buckets.get(`${x},${y}`)) != null ? _b : []) {\n            if (other.index <= particle.index) continue;\n            const target = predicted[other.index];\n            let dx = target.x - point.x, dy = target.y - point.y;\n            let length = Math.hypot(dx, dy);\n            if (length >= distance) continue;\n            if (length < 1e-6) {\n              const unit = direction(particle.id, other.id);\n              dx = unit.x;\n              dy = unit.y;\n              length = 1;\n            }\n            const factor = (distance - length) / length * _ForceLayout.collisionStrength;\n            const aShare = particle.fixed ? 0 : other.fixed ? 1 : 0.5;\n            const bShare = other.fixed ? 0 : particle.fixed ? 1 : 0.5;\n            particle.vx -= dx * factor * aShare;\n            particle.vy -= dy * factor * aShare;\n            other.vx += dx * factor * bShare;\n            other.vy += dy * factor * bShare;\n          }\n        }\n      }\n    }\n  };\n  __publicField(_ForceLayout, "alphaDecay", 1 - Math.pow(1e-3, 1 / 300));\n  __publicField(_ForceLayout, "alphaMin", 1e-3);\n  __publicField(_ForceLayout, "damping", 0.6);\n  __publicField(_ForceLayout, "thetaSquared", 0.9 * 0.9);\n  __publicField(_ForceLayout, "collisionDistance", 120);\n  __publicField(_ForceLayout, "collisionStrength", 0.5);\n  var ForceLayout = _ForceLayout;\n  function buildTree(points) {\n    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;\n    for (const point of points) {\n      minX = Math.min(minX, point.x);\n      minY = Math.min(minY, point.y);\n      maxX = Math.max(maxX, point.x);\n      maxY = Math.max(maxY, point.y);\n    }\n    const width = Math.max(1, maxX - minX, maxY - minY) * 1.000001;\n    return splitQuad(points, minX, minY, width, 0);\n  }\n  function splitQuad(points, x, y, width, depth) {\n    let cx = 0, cy = 0;\n    for (const point of points) {\n      cx += point.x;\n      cy += point.y;\n    }\n    const quad = { x, y, width, count: points.length, cx: cx / points.length, cy: cy / points.length };\n    if (points.length <= 4 || depth >= 24 || width < 1e-6) {\n      quad.points = points;\n      return quad;\n    }\n    const half = width / 2, groups = [[], [], [], []];\n    for (const point of points) groups[(point.x >= x + half ? 1 : 0) + (point.y >= y + half ? 2 : 0)].push(point);\n    quad.children = groups.flatMap((group, index) => group.length ? [splitQuad(group, x + index % 2 * half, y + (index >= 2 ? half : 0), half, depth + 1)] : []);\n    return quad;\n  }\n  function finite(value, fallback) {\n    return Number.isFinite(value) ? value : fallback;\n  }\n  function clamp(value, min, max) {\n    return Math.max(min, Math.min(max, value));\n  }\n  function validPoint(point) {\n    return !!point && Number.isFinite(point.x) && Number.isFinite(point.y) && Math.abs(point.x) <= 1e7 && Math.abs(point.y) <= 1e7;\n  }\n  function hash(value) {\n    let result = 2166136261;\n    for (const char of value) {\n      result ^= char.charCodeAt(0);\n      result = Math.imul(result, 16777619);\n    }\n    return result >>> 0;\n  }\n  function seedPoint(id, index, count) {\n    const angle = hash(id) / 4294967296 * Math.PI * 2;\n    const radius = (120 + Math.sqrt(count) * 40) * Math.sqrt((index + 0.5) / Math.max(1, count));\n    return { x: Math.cos(angle) * radius, y: Math.sin(angle) * radius };\n  }\n  function direction(from, to) {\n    const first = from < to ? from : to, second = from < to ? to : from;\n    const angle = hash(first + "\\0" + second) / 4294967296 * Math.PI * 2;\n    const sign = from < to ? 1 : -1;\n    return { x: Math.cos(angle) * sign, y: Math.sin(angle) * sign };\n  }\n\n  // src/layout-worker.ts\n  var layout = new ForceLayout();\n  var nodes = [];\n  var revision = 0;\n  var commandVersion = 0;\n  var timer;\n  var scope = self;\n  function publish() {\n    const positions = new Float32Array(nodes.length * 2);\n    nodes.forEach((node, index) => {\n      positions[index * 2] = node.x;\n      positions[index * 2 + 1] = node.y;\n    });\n    scope.postMessage({ revision, commandVersion, positions, running: layout.isRunning }, [positions.buffer]);\n  }\n  function run() {\n    timer = void 0;\n    layout.tick(nodes);\n    publish();\n    if (layout.isRunning) timer = setTimeout(run, 1e3 / 60);\n  }\n  function start() {\n    if (timer === void 0) timer = setTimeout(run, 0);\n  }\n  scope.onmessage = (event) => {\n    const message = event.data;\n    commandVersion = message.commandVersion;\n    switch (message.type) {\n      case "sync":\n        revision = message.revision;\n        nodes = message.nodes;\n        layout.sync(nodes, message.edges, message.saved);\n        break;\n      case "configure":\n        layout.configure(message.options);\n        break;\n      case "selected":\n        layout.setSelected(message.path);\n        break;\n      case "pin":\n        layout.pin(message.path, message.point);\n        break;\n      case "move":\n        layout.movePinned(message.path, message.point);\n        break;\n      case "unpin":\n        layout.unpin(message.path);\n        break;\n      case "reheat":\n        layout.reheat(message.alpha);\n        break;\n      case "reset":\n        layout.reset();\n        break;\n    }\n    publish();\n    if (layout.isRunning) start();\n  };\n})();\n';
+var layout_worker_default = '"use strict";\n(() => {\n  var __defProp = Object.defineProperty;\n  var __defNormalProp = (obj, key, value) => key in obj ? __defProp(obj, key, { enumerable: true, configurable: true, writable: true, value }) : obj[key] = value;\n  var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "symbol" ? key + "" : key, value);\n\n  // src/force-layout.ts\n  var DEFAULT_FORCE_OPTIONS = Object.freeze({\n    centerStrength: 0.1,\n    repelStrength: 1e3,\n    linkStrength: 1,\n    linkDistance: 250\n  });\n  var _ForceLayout = class _ForceLayout {\n    constructor(options = {}) {\n      __publicField(this, "particles", []);\n      __publicField(this, "byId", /* @__PURE__ */ new Map());\n      __publicField(this, "links", []);\n      __publicField(this, "topology", "");\n      __publicField(this, "alpha", 0);\n      __publicField(this, "alphaTarget", 0);\n      __publicField(this, "options", { ...DEFAULT_FORCE_OPTIONS });\n      __publicField(this, "local", false);\n      __publicField(this, "active", /* @__PURE__ */ new Set());\n      __publicField(this, "rests", /* @__PURE__ */ new Map());\n      this.configure(options);\n    }\n    configure(options) {\n      const next = { ...this.options };\n      for (const key of Object.keys(next)) {\n        const value = options[key];\n        if (value !== void 0 && Number.isFinite(value)) {\n          next[key] = key === "linkDistance" ? clamp(value, 1, 1e4) : clamp(value, 0, key === "repelStrength" ? 1e6 : 10);\n        }\n      }\n      const changed = Object.keys(next).some((key) => next[key] !== this.options[key]);\n      this.options = next;\n      if (changed) {\n        if (this.local) this.activateLocal(this.particles.map((node) => node.id));\n        this.reheat(0.3);\n      }\n    }\n    reset() {\n      this.particles = [];\n      this.byId.clear();\n      this.links = [];\n      this.topology = "";\n      this.alpha = 0;\n      this.alphaTarget = 0;\n      this.active.clear();\n      this.rests.clear();\n    }\n    sync(nodes2, edges, saved, local = false) {\n      var _a;\n      const wasLocal = this.local;\n      this.local = local;\n      const oldIds = new Set(this.byId.keys());\n      const oldLinks = new Map(this.links.map((link) => [JSON.stringify([link.source.id, link.target.id]), [link.source.id, link.target.id]]));\n      const ids = [...new Set(nodes2.map((node) => node.path))].sort();\n      const idSet = new Set(ids);\n      const uniqueEdges = /* @__PURE__ */ new Map();\n      for (const edge of edges) {\n        if (edge.from !== edge.to && idSet.has(edge.from) && idSet.has(edge.to)) uniqueEdges.set(JSON.stringify([edge.from, edge.to]), edge);\n      }\n      const sortedEdges = [...uniqueEdges.entries()].sort(([a], [b]) => a.localeCompare(b));\n      const topology = JSON.stringify([ids, sortedEdges.map(([key]) => key)]);\n      const changed = topology !== this.topology;\n      const firstGraph = this.particles.length === 0;\n      this.topology = topology;\n      for (const id of this.byId.keys()) if (!idSet.has(id)) {\n        this.byId.delete(id);\n        this.active.delete(id);\n        this.rests.delete(id);\n      }\n      const nodeById = new Map(nodes2.map((node) => [node.path, node]));\n      const adjacency = /* @__PURE__ */ new Map();\n      for (const [, edge] of sortedEdges) {\n        if (!adjacency.has(edge.from)) adjacency.set(edge.from, []);\n        if (!adjacency.has(edge.to)) adjacency.set(edge.to, []);\n        adjacency.get(edge.from).push(edge.to);\n        adjacency.get(edge.to).push(edge.from);\n      }\n      const added = [];\n      for (const [index, id] of ids.entries()) {\n        if (this.byId.has(id)) continue;\n        const stored = saved[id];\n        const original = nodeById.get(id);\n        const explicit = validPoint(stored) ? stored : validPoint(original) && (original.x !== 0 || original.y !== 0) ? original : void 0;\n        const point = explicit != null ? explicit : seedPoint(id, index, ids.length);\n        this.byId.set(id, { id, index, x: point.x, y: point.y, vx: 0, vy: 0, degree: 0 });\n        if (!explicit) added.push(id);\n      }\n      const newSet = new Set(added);\n      for (const id of added) {\n        const neighbors = ((_a = adjacency.get(id)) != null ? _a : []).filter((other) => !newSet.has(other)).map((other) => this.byId.get(other));\n        if (!neighbors.length) continue;\n        const angle = hash(id) / 4294967296 * Math.PI * 2;\n        const point = this.byId.get(id);\n        const radius = 40 + hash(id + "radius") % 40;\n        point.x = neighbors.reduce((sum, node) => sum + node.x, 0) / neighbors.length + Math.cos(angle) * radius;\n        point.y = neighbors.reduce((sum, node) => sum + node.y, 0) / neighbors.length + Math.sin(angle) * radius;\n      }\n      this.particles = ids.map((id, index) => {\n        const particle = this.byId.get(id);\n        particle.index = index;\n        particle.degree = 0;\n        return particle;\n      });\n      for (const [, edge] of sortedEdges) {\n        this.byId.get(edge.from).degree++;\n        this.byId.get(edge.to).degree++;\n      }\n      this.links = sortedEdges.map(([, edge]) => {\n        const source = this.byId.get(edge.from), target = this.byId.get(edge.to);\n        return { source, target, bias: source.degree / (source.degree + target.degree), strength: 1 / Math.min(source.degree, target.degree) };\n      });\n      for (const particle of this.particles) if (!this.rests.has(particle.id)) this.rests.set(particle.id, { x: particle.x, y: particle.y });\n      this.alphaTarget = this.particles.some((particle) => particle.fixed) ? 0.3 : 0;\n      if (!this.particles.length) this.alpha = 0;\n      else if (local) {\n        if (firstGraph || !wasLocal) {\n          this.alpha = 0;\n          this.active.clear();\n          this.activateLocal(added);\n        } else if (changed) {\n          const affected = new Set(ids.filter((id) => !oldIds.has(id)));\n          for (const [key, edge] of sortedEdges) if (!oldLinks.has(key)) {\n            affected.add(edge.from);\n            affected.add(edge.to);\n          }\n          for (const [key, endpoints] of oldLinks) if (!uniqueEdges.has(key)) {\n            for (const id of endpoints) if (idSet.has(id)) affected.add(id);\n          }\n          this.activateLocal([...affected]);\n        }\n        if (this.active.size && changed) this.reheat(0.3);\n      } else if (changed || wasLocal) this.reheat(firstGraph ? 1 : 0.3);\n      this.copyToNodes(nodes2);\n    }\n    /** Selection affects rendering only; it must not attract the whole graph. */\n    setSelected(_path) {\n    }\n    activateLocal(ids) {\n      var _a;\n      if (!this.local || !ids.length) return;\n      if (ids.length >= this.particles.length) {\n        for (const node of this.particles) this.active.add(node.id);\n        return;\n      }\n      const region = new Set(ids.filter((id) => this.byId.has(id)));\n      const adjacency = /* @__PURE__ */ new Map();\n      for (const link of this.links) {\n        if (!adjacency.has(link.source.id)) adjacency.set(link.source.id, /* @__PURE__ */ new Set());\n        if (!adjacency.has(link.target.id)) adjacency.set(link.target.id, /* @__PURE__ */ new Set());\n        adjacency.get(link.source.id).add(link.target.id);\n        adjacency.get(link.target.id).add(link.source.id);\n      }\n      let frontier = [...region];\n      for (let depth = 0; depth < 2; depth++) {\n        const next = [];\n        for (const id of frontier) for (const other of (_a = adjacency.get(id)) != null ? _a : []) if (!region.has(other)) {\n          region.add(other);\n          next.push(other);\n        }\n        frontier = next;\n      }\n      const centers = ids.flatMap((id) => {\n        var _a2;\n        return (_a2 = this.byId.get(id)) != null ? _a2 : [];\n      }), radius = Math.max(180, this.options.linkDistance * 1.5);\n      for (const node of this.particles) if (centers.some((center) => Math.hypot(node.x - center.x, node.y - center.y) < radius)) region.add(node.id);\n      for (const id of region) this.active.add(id);\n    }\n    pin(path, position) {\n      const particle = this.byId.get(path);\n      if (!particle || !validPoint(position)) return;\n      this.activateLocal([path]);\n      particle.fixed = { ...position };\n      particle.x = position.x;\n      particle.y = position.y;\n      particle.vx = 0;\n      particle.vy = 0;\n      this.alphaTarget = 0.3;\n      this.reheat(0.3);\n    }\n    movePinned(path, position) {\n      const particle = this.byId.get(path);\n      if (!(particle == null ? void 0 : particle.fixed) || !validPoint(position)) return;\n      particle.fixed = { ...position };\n      particle.x = position.x;\n      particle.y = position.y;\n      particle.vx = 0;\n      particle.vy = 0;\n      this.alphaTarget = 0.3;\n      this.reheat(0.3);\n      this.activateLocal([path]);\n    }\n    unpin(path) {\n      const particle = this.byId.get(path);\n      if (!(particle == null ? void 0 : particle.fixed)) return;\n      this.rests.set(path, { ...particle.fixed });\n      particle.fixed = void 0;\n      particle.vx = 0;\n      particle.vy = 0;\n      this.alphaTarget = this.particles.some((node) => node.fixed) ? 0.3 : 0;\n      this.reheat(0.3);\n    }\n    reheat(alpha = 0.3) {\n      this.alpha = Math.max(this.alpha, clamp(finite(alpha, 0.3), 0, 1));\n    }\n    tick(nodes2) {\n      if (!this.isRunning) {\n        this.copyToNodes(nodes2);\n        return false;\n      }\n      this.alpha += (this.alphaTarget - this.alpha) * _ForceLayout.alphaDecay;\n      const center = this.options.centerStrength * this.alpha * (this.local ? 0.05 : 1);\n      for (const particle of this.particles) {\n        const rest = this.local ? this.rests.get(particle.id) : { x: 0, y: 0 };\n        particle.vx -= (particle.x - rest.x) * center;\n        particle.vy -= (particle.y - rest.y) * center;\n      }\n      for (const link of this.links) {\n        const a = link.source, b = link.target;\n        let dx = b.x + b.vx - a.x - a.vx, dy = b.y + b.vy - a.y - a.vy;\n        if (dx === 0 && dy === 0) {\n          const unit = direction(a.id, b.id);\n          dx = unit.x * 0.1;\n          dy = unit.y * 0.1;\n        }\n        const length = Math.hypot(dx, dy);\n        const factor = (length - this.options.linkDistance) / length * this.alpha * this.options.linkStrength * link.strength;\n        dx *= factor;\n        dy *= factor;\n        if (this.local) {\n          const scale = Math.min(0.35, 16 * this.alpha / Math.max(1e-3, Math.hypot(dx, dy)));\n          dx *= scale;\n          dy *= scale;\n        }\n        b.vx -= dx * link.bias;\n        b.vy -= dy * link.bias;\n        a.vx += dx * (1 - link.bias);\n        a.vy += dy * (1 - link.bias);\n      }\n      if (this.particles.length > 1 && this.options.repelStrength > 0) {\n        const tree = buildTree(this.particles);\n        const strength = this.options.repelStrength * this.alpha;\n        for (const particle of this.particles) this.repulse(particle, tree, strength);\n      }\n      this.collide();\n      for (const particle of this.particles) {\n        if (particle.fixed) {\n          particle.x = particle.fixed.x;\n          particle.y = particle.fixed.y;\n          particle.vx = 0;\n          particle.vy = 0;\n        } else if (this.local && !this.active.has(particle.id)) {\n          particle.vx = 0;\n          particle.vy = 0;\n        } else {\n          particle.vx *= _ForceLayout.damping;\n          particle.vy *= _ForceLayout.damping;\n          if (this.local) {\n            const scale = Math.min(1, 8 / Math.max(1e-3, Math.hypot(particle.vx, particle.vy)));\n            particle.vx *= scale;\n            particle.vy *= scale;\n          }\n          particle.x += particle.vx;\n          particle.y += particle.vy;\n          if (!Number.isFinite(particle.x) || !Number.isFinite(particle.y) || Math.abs(particle.x) > 1e7 || Math.abs(particle.y) > 1e7) {\n            const seed = seedPoint(particle.id, particle.index, this.particles.length);\n            particle.x = seed.x;\n            particle.y = seed.y;\n            particle.vx = 0;\n            particle.vy = 0;\n          }\n        }\n      }\n      if (this.alphaTarget === 0 && this.alpha < _ForceLayout.alphaMin) {\n        this.alpha = 0;\n        this.active.clear();\n      }\n      this.copyToNodes(nodes2);\n      return this.isRunning;\n    }\n    snapshot() {\n      return Object.fromEntries(this.particles.map((particle) => [particle.id, { x: particle.x, y: particle.y }]));\n    }\n    get isRunning() {\n      return this.particles.length > 0 && (this.alpha >= _ForceLayout.alphaMin || this.alphaTarget > 0);\n    }\n    copyToNodes(nodes2) {\n      for (const node of nodes2) {\n        const point = this.byId.get(node.path);\n        if (point) {\n          node.x = point.x;\n          node.y = point.y;\n        }\n      }\n    }\n    repulse(particle, quad, strength) {\n      var _a;\n      if (!quad.count) return;\n      let dx = particle.x - quad.cx, dy = particle.y - quad.cy;\n      let squared = dx * dx + dy * dy;\n      const contains = particle.x >= quad.x && particle.x <= quad.x + quad.width && particle.y >= quad.y && particle.y <= quad.y + quad.width;\n      if (quad.children && !contains && quad.width * quad.width < _ForceLayout.thetaSquared * squared) {\n        const factor = strength * quad.count / Math.max(1, squared);\n        particle.vx += dx * factor;\n        particle.vy += dy * factor;\n      } else if (quad.children) {\n        for (const child of quad.children) this.repulse(particle, child, strength);\n      } else {\n        for (const other of (_a = quad.points) != null ? _a : []) {\n          if (other === particle) continue;\n          dx = particle.x - other.x;\n          dy = particle.y - other.y;\n          squared = dx * dx + dy * dy;\n          if (squared < 1e-12) {\n            const unit = direction(other.id, particle.id);\n            dx = unit.x;\n            dy = unit.y;\n            squared = 1;\n          }\n          const factor = strength / Math.max(1, squared);\n          particle.vx += dx * factor;\n          particle.vy += dy * factor;\n        }\n      }\n    }\n    /** Predicted-position uniform buckets avoid an all-pairs collision pass. */\n    collide() {\n      var _a, _b;\n      const distance = _ForceLayout.collisionDistance;\n      const buckets = /* @__PURE__ */ new Map();\n      const predicted = this.particles.map((node) => ({ x: node.x + node.vx, y: node.y + node.vy }));\n      for (const particle of this.particles) {\n        const point = predicted[particle.index];\n        const key = `${Math.floor(point.x / distance)},${Math.floor(point.y / distance)}`;\n        const bucket = (_a = buckets.get(key)) != null ? _a : [];\n        bucket.push(particle);\n        buckets.set(key, bucket);\n      }\n      for (const particle of this.particles) {\n        const point = predicted[particle.index], cellX = Math.floor(point.x / distance), cellY = Math.floor(point.y / distance);\n        for (let x = cellX - 1; x <= cellX + 1; x++) for (let y = cellY - 1; y <= cellY + 1; y++) {\n          for (const other of (_b = buckets.get(`${x},${y}`)) != null ? _b : []) {\n            if (other.index <= particle.index) continue;\n            const target = predicted[other.index];\n            let dx = target.x - point.x, dy = target.y - point.y;\n            let length = Math.hypot(dx, dy);\n            if (length >= distance) continue;\n            if (length < 1e-6) {\n              const unit = direction(particle.id, other.id);\n              dx = unit.x;\n              dy = unit.y;\n              length = 1;\n            }\n            const factor = (distance - length) / length * _ForceLayout.collisionStrength;\n            const aShare = particle.fixed ? 0 : other.fixed ? 1 : 0.5;\n            const bShare = other.fixed ? 0 : particle.fixed ? 1 : 0.5;\n            particle.vx -= dx * factor * aShare;\n            particle.vy -= dy * factor * aShare;\n            other.vx += dx * factor * bShare;\n            other.vy += dy * factor * bShare;\n          }\n        }\n      }\n    }\n  };\n  __publicField(_ForceLayout, "alphaDecay", 1 - Math.pow(1e-3, 1 / 300));\n  __publicField(_ForceLayout, "alphaMin", 1e-3);\n  __publicField(_ForceLayout, "damping", 0.6);\n  __publicField(_ForceLayout, "thetaSquared", 0.9 * 0.9);\n  __publicField(_ForceLayout, "collisionDistance", 120);\n  __publicField(_ForceLayout, "collisionStrength", 0.5);\n  var ForceLayout = _ForceLayout;\n  function buildTree(points) {\n    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;\n    for (const point of points) {\n      minX = Math.min(minX, point.x);\n      minY = Math.min(minY, point.y);\n      maxX = Math.max(maxX, point.x);\n      maxY = Math.max(maxY, point.y);\n    }\n    const width = Math.max(1, maxX - minX, maxY - minY) * 1.000001;\n    return splitQuad(points, minX, minY, width, 0);\n  }\n  function splitQuad(points, x, y, width, depth) {\n    let cx = 0, cy = 0;\n    for (const point of points) {\n      cx += point.x;\n      cy += point.y;\n    }\n    const quad = { x, y, width, count: points.length, cx: cx / points.length, cy: cy / points.length };\n    if (points.length <= 4 || depth >= 24 || width < 1e-6) {\n      quad.points = points;\n      return quad;\n    }\n    const half = width / 2, groups = [[], [], [], []];\n    for (const point of points) groups[(point.x >= x + half ? 1 : 0) + (point.y >= y + half ? 2 : 0)].push(point);\n    quad.children = groups.flatMap((group, index) => group.length ? [splitQuad(group, x + index % 2 * half, y + (index >= 2 ? half : 0), half, depth + 1)] : []);\n    return quad;\n  }\n  function finite(value, fallback) {\n    return Number.isFinite(value) ? value : fallback;\n  }\n  function clamp(value, min, max) {\n    return Math.max(min, Math.min(max, value));\n  }\n  function validPoint(point) {\n    return !!point && Number.isFinite(point.x) && Number.isFinite(point.y) && Math.abs(point.x) <= 1e7 && Math.abs(point.y) <= 1e7;\n  }\n  function hash(value) {\n    let result = 2166136261;\n    for (const char of value) {\n      result ^= char.charCodeAt(0);\n      result = Math.imul(result, 16777619);\n    }\n    return result >>> 0;\n  }\n  function seedPoint(id, index, count) {\n    const angle = hash(id) / 4294967296 * Math.PI * 2;\n    const radius = (120 + Math.sqrt(count) * 40) * Math.sqrt((index + 0.5) / Math.max(1, count));\n    return { x: Math.cos(angle) * radius, y: Math.sin(angle) * radius };\n  }\n  function direction(from, to) {\n    const first = from < to ? from : to, second = from < to ? to : from;\n    const angle = hash(first + "\\0" + second) / 4294967296 * Math.PI * 2;\n    const sign = from < to ? 1 : -1;\n    return { x: Math.cos(angle) * sign, y: Math.sin(angle) * sign };\n  }\n\n  // src/layout-worker.ts\n  var layout = new ForceLayout();\n  var nodes = [];\n  var revision = 0;\n  var commandVersion = 0;\n  var timer;\n  var scope = self;\n  function publish() {\n    const positions = new Float32Array(nodes.length * 2);\n    nodes.forEach((node, index) => {\n      positions[index * 2] = node.x;\n      positions[index * 2 + 1] = node.y;\n    });\n    scope.postMessage({ revision, commandVersion, positions, running: layout.isRunning }, [positions.buffer]);\n  }\n  function run() {\n    timer = void 0;\n    layout.tick(nodes);\n    publish();\n    if (layout.isRunning) timer = setTimeout(run, 1e3 / 60);\n  }\n  function start() {\n    if (timer === void 0) timer = setTimeout(run, 0);\n  }\n  scope.onmessage = (event) => {\n    const message = event.data;\n    commandVersion = message.commandVersion;\n    switch (message.type) {\n      case "sync":\n        revision = message.revision;\n        nodes = message.nodes;\n        layout.sync(nodes, message.edges, message.saved, !!message.local);\n        break;\n      case "configure":\n        layout.configure(message.options);\n        break;\n      case "selected":\n        layout.setSelected(message.path);\n        break;\n      case "pin":\n        layout.pin(message.path, message.point);\n        break;\n      case "move":\n        layout.movePinned(message.path, message.point);\n        break;\n      case "unpin":\n        layout.unpin(message.path);\n        break;\n      case "reheat":\n        layout.reheat(message.alpha);\n        break;\n      case "reset":\n        layout.reset();\n        break;\n    }\n    publish();\n    if (layout.isRunning) start();\n  };\n})();\n';
 
 // src/force-layout.ts
 var DEFAULT_FORCE_OPTIONS = Object.freeze({
@@ -958,6 +958,9 @@ var _ForceLayout = class _ForceLayout {
     __publicField(this, "alpha", 0);
     __publicField(this, "alphaTarget", 0);
     __publicField(this, "options", { ...DEFAULT_FORCE_OPTIONS });
+    __publicField(this, "local", false);
+    __publicField(this, "active", /* @__PURE__ */ new Set());
+    __publicField(this, "rests", /* @__PURE__ */ new Map());
     this.configure(options);
   }
   configure(options) {
@@ -970,7 +973,10 @@ var _ForceLayout = class _ForceLayout {
     }
     const changed = Object.keys(next).some((key) => next[key] !== this.options[key]);
     this.options = next;
-    if (changed) this.reheat(0.3);
+    if (changed) {
+      if (this.local) this.activateLocal(this.particles.map((node) => node.id));
+      this.reheat(0.3);
+    }
   }
   reset() {
     this.particles = [];
@@ -979,9 +985,15 @@ var _ForceLayout = class _ForceLayout {
     this.topology = "";
     this.alpha = 0;
     this.alphaTarget = 0;
+    this.active.clear();
+    this.rests.clear();
   }
-  sync(nodes, edges, saved) {
+  sync(nodes, edges, saved, local = false) {
     var _a;
+    const wasLocal = this.local;
+    this.local = local;
+    const oldIds = new Set(this.byId.keys());
+    const oldLinks = new Map(this.links.map((link) => [JSON.stringify([link.source.id, link.target.id]), [link.source.id, link.target.id]]));
     const ids = [...new Set(nodes.map((node) => node.path))].sort();
     const idSet = new Set(ids);
     const uniqueEdges = /* @__PURE__ */ new Map();
@@ -993,7 +1005,11 @@ var _ForceLayout = class _ForceLayout {
     const changed = topology !== this.topology;
     const firstGraph = this.particles.length === 0;
     this.topology = topology;
-    for (const id of this.byId.keys()) if (!idSet.has(id)) this.byId.delete(id);
+    for (const id of this.byId.keys()) if (!idSet.has(id)) {
+      this.byId.delete(id);
+      this.active.delete(id);
+      this.rests.delete(id);
+    }
     const nodeById = new Map(nodes.map((node) => [node.path, node]));
     const adjacency = /* @__PURE__ */ new Map();
     for (const [, edge] of sortedEdges) {
@@ -1036,17 +1052,67 @@ var _ForceLayout = class _ForceLayout {
       const source = this.byId.get(edge.from), target = this.byId.get(edge.to);
       return { source, target, bias: source.degree / (source.degree + target.degree), strength: 1 / Math.min(source.degree, target.degree) };
     });
+    for (const particle of this.particles) if (!this.rests.has(particle.id)) this.rests.set(particle.id, { x: particle.x, y: particle.y });
     this.alphaTarget = this.particles.some((particle) => particle.fixed) ? 0.3 : 0;
     if (!this.particles.length) this.alpha = 0;
-    else if (changed) this.reheat(firstGraph ? 1 : 0.3);
+    else if (local) {
+      if (firstGraph || !wasLocal) {
+        this.alpha = 0;
+        this.active.clear();
+        this.activateLocal(added);
+      } else if (changed) {
+        const affected = new Set(ids.filter((id) => !oldIds.has(id)));
+        for (const [key, edge] of sortedEdges) if (!oldLinks.has(key)) {
+          affected.add(edge.from);
+          affected.add(edge.to);
+        }
+        for (const [key, endpoints] of oldLinks) if (!uniqueEdges.has(key)) {
+          for (const id of endpoints) if (idSet.has(id)) affected.add(id);
+        }
+        this.activateLocal([...affected]);
+      }
+      if (this.active.size && changed) this.reheat(0.3);
+    } else if (changed || wasLocal) this.reheat(firstGraph ? 1 : 0.3);
     this.copyToNodes(nodes);
   }
   /** Selection affects rendering only; it must not attract the whole graph. */
   setSelected(_path) {
   }
+  activateLocal(ids) {
+    var _a;
+    if (!this.local || !ids.length) return;
+    if (ids.length >= this.particles.length) {
+      for (const node of this.particles) this.active.add(node.id);
+      return;
+    }
+    const region = new Set(ids.filter((id) => this.byId.has(id)));
+    const adjacency = /* @__PURE__ */ new Map();
+    for (const link of this.links) {
+      if (!adjacency.has(link.source.id)) adjacency.set(link.source.id, /* @__PURE__ */ new Set());
+      if (!adjacency.has(link.target.id)) adjacency.set(link.target.id, /* @__PURE__ */ new Set());
+      adjacency.get(link.source.id).add(link.target.id);
+      adjacency.get(link.target.id).add(link.source.id);
+    }
+    let frontier = [...region];
+    for (let depth = 0; depth < 2; depth++) {
+      const next = [];
+      for (const id of frontier) for (const other of (_a = adjacency.get(id)) != null ? _a : []) if (!region.has(other)) {
+        region.add(other);
+        next.push(other);
+      }
+      frontier = next;
+    }
+    const centers = ids.flatMap((id) => {
+      var _a2;
+      return (_a2 = this.byId.get(id)) != null ? _a2 : [];
+    }), radius = Math.max(180, this.options.linkDistance * 1.5);
+    for (const node of this.particles) if (centers.some((center) => Math.hypot(node.x - center.x, node.y - center.y) < radius)) region.add(node.id);
+    for (const id of region) this.active.add(id);
+  }
   pin(path, position) {
     const particle = this.byId.get(path);
     if (!particle || !validPoint(position)) return;
+    this.activateLocal([path]);
     particle.fixed = { ...position };
     particle.x = position.x;
     particle.y = position.y;
@@ -1065,10 +1131,12 @@ var _ForceLayout = class _ForceLayout {
     particle.vy = 0;
     this.alphaTarget = 0.3;
     this.reheat(0.3);
+    this.activateLocal([path]);
   }
   unpin(path) {
     const particle = this.byId.get(path);
     if (!(particle == null ? void 0 : particle.fixed)) return;
+    this.rests.set(path, { ...particle.fixed });
     particle.fixed = void 0;
     particle.vx = 0;
     particle.vy = 0;
@@ -1084,10 +1152,11 @@ var _ForceLayout = class _ForceLayout {
       return false;
     }
     this.alpha += (this.alphaTarget - this.alpha) * _ForceLayout.alphaDecay;
-    const center = this.options.centerStrength * this.alpha;
+    const center = this.options.centerStrength * this.alpha * (this.local ? 0.05 : 1);
     for (const particle of this.particles) {
-      particle.vx -= particle.x * center;
-      particle.vy -= particle.y * center;
+      const rest = this.local ? this.rests.get(particle.id) : { x: 0, y: 0 };
+      particle.vx -= (particle.x - rest.x) * center;
+      particle.vy -= (particle.y - rest.y) * center;
     }
     for (const link of this.links) {
       const a = link.source, b = link.target;
@@ -1101,6 +1170,11 @@ var _ForceLayout = class _ForceLayout {
       const factor = (length - this.options.linkDistance) / length * this.alpha * this.options.linkStrength * link.strength;
       dx *= factor;
       dy *= factor;
+      if (this.local) {
+        const scale = Math.min(0.35, 16 * this.alpha / Math.max(1e-3, Math.hypot(dx, dy)));
+        dx *= scale;
+        dy *= scale;
+      }
       b.vx -= dx * link.bias;
       b.vy -= dy * link.bias;
       a.vx += dx * (1 - link.bias);
@@ -1118,9 +1192,17 @@ var _ForceLayout = class _ForceLayout {
         particle.y = particle.fixed.y;
         particle.vx = 0;
         particle.vy = 0;
+      } else if (this.local && !this.active.has(particle.id)) {
+        particle.vx = 0;
+        particle.vy = 0;
       } else {
         particle.vx *= _ForceLayout.damping;
         particle.vy *= _ForceLayout.damping;
+        if (this.local) {
+          const scale = Math.min(1, 8 / Math.max(1e-3, Math.hypot(particle.vx, particle.vy)));
+          particle.vx *= scale;
+          particle.vy *= scale;
+        }
         particle.x += particle.vx;
         particle.y += particle.vy;
         if (!Number.isFinite(particle.x) || !Number.isFinite(particle.y) || Math.abs(particle.x) > 1e7 || Math.abs(particle.y) > 1e7) {
@@ -1132,7 +1214,10 @@ var _ForceLayout = class _ForceLayout {
         }
       }
     }
-    if (this.alphaTarget === 0 && this.alpha < _ForceLayout.alphaMin) this.alpha = 0;
+    if (this.alphaTarget === 0 && this.alpha < _ForceLayout.alphaMin) {
+      this.alpha = 0;
+      this.active.clear();
+    }
     this.copyToNodes(nodes);
     return this.isRunning;
   }
@@ -1300,6 +1385,7 @@ var GraphLayout = class {
     __publicField(this, "options", {});
     __publicField(this, "pinned", /* @__PURE__ */ new Map());
     __publicField(this, "disposed", false);
+    __publicField(this, "local", false);
     try {
       const url = URL.createObjectURL(new Blob([layout_worker_default], { type: "text/javascript" }));
       try {
@@ -1337,15 +1423,16 @@ var GraphLayout = class {
     this.worker = void 0;
     this.fallback = new ForceLayout();
     this.fallback.configure(this.options);
-    this.fallback.sync(this.nodes, this.edges, this.positions);
+    this.fallback.sync(this.nodes, this.edges, this.positions, this.local);
     this.fallback.setSelected(this.selected);
     for (const [path, point] of this.pinned) this.fallback.pin(path, point);
   }
   send(message) {
     if (!this.disposed && this.worker) this.worker.postMessage({ ...message, commandVersion: ++this.commandVersion });
   }
-  sync(nodes, edges, saved) {
+  sync(nodes, edges, saved, local = false) {
     var _a;
+    this.local = local;
     this.nodes = [...nodes];
     this.edges = [...edges];
     this.revision++;
@@ -1359,10 +1446,10 @@ var GraphLayout = class {
       }
     }
     this.positions = current;
-    if (this.fallback) this.fallback.sync(nodes, edges, this.positions);
+    if (this.fallback) this.fallback.sync(nodes, edges, this.positions, local);
     else {
       this.running = nodes.length > 0;
-      this.send({ type: "sync", revision: this.revision, nodes, edges, saved: this.positions });
+      this.send({ type: "sync", revision: this.revision, nodes, edges, saved: this.positions, local });
     }
   }
   configure(options) {
@@ -1773,6 +1860,264 @@ function isMacTrackpadPan(event, platform) {
   return !Number.isInteger(event.deltaY) || !Number.isInteger(event.deltaX);
 }
 
+// src/graph-label-placement.ts
+function rectsOverlap(a, b, gap = 0) {
+  return a.left < b.right + gap && a.right + gap > b.left && a.top < b.bottom + gap && a.bottom + gap > b.top;
+}
+var RectIndex = class {
+  constructor(cellSize = 128) {
+    this.cellSize = cellSize;
+    __publicField(this, "cells", /* @__PURE__ */ new Map());
+    __publicField(this, "rectangles", /* @__PURE__ */ new Map());
+  }
+  keys(rect) {
+    const keys = [];
+    for (let x = Math.floor(rect.left / this.cellSize); x <= Math.floor(rect.right / this.cellSize); x++) {
+      for (let y = Math.floor(rect.top / this.cellSize); y <= Math.floor(rect.bottom / this.cellSize); y++) keys.push(`${x}:${y}`);
+    }
+    return keys;
+  }
+  set(key, rect) {
+    this.delete(key);
+    this.rectangles.set(key, rect);
+    for (const cell of this.keys(rect)) {
+      if (!this.cells.has(cell)) this.cells.set(cell, /* @__PURE__ */ new Set());
+      this.cells.get(cell).add(key);
+    }
+  }
+  delete(key) {
+    const rect = this.rectangles.get(key);
+    if (!rect) return;
+    for (const cell of this.keys(rect)) {
+      const items = this.cells.get(cell);
+      items == null ? void 0 : items.delete(key);
+      if (!(items == null ? void 0 : items.size)) this.cells.delete(cell);
+    }
+    this.rectangles.delete(key);
+  }
+  collides(rect, ignore, gap = 8) {
+    var _a;
+    const expanded = { left: rect.left - gap, right: rect.right + gap, top: rect.top - gap, bottom: rect.bottom + gap };
+    for (const cell of this.keys(expanded)) for (const key of (_a = this.cells.get(cell)) != null ? _a : []) {
+      if (key !== ignore && rectsOverlap(rect, this.rectangles.get(key), gap)) return true;
+    }
+    return false;
+  }
+};
+function placeGraphLabels(labels, dots) {
+  var _a;
+  const occupied = new RectIndex();
+  for (const dot of dots) occupied.set("dot:" + dot.key, {
+    left: dot.point.x - dot.radius,
+    right: dot.point.x + dot.radius,
+    top: dot.point.y - dot.radius,
+    bottom: dot.point.y + dot.radius
+  });
+  const result = /* @__PURE__ */ new Map();
+  for (const label of [...labels].sort((a, b) => b.priority - a.priority || a.key.localeCompare(b.key))) {
+    const { point: p, radius: r, width: w, height: h } = label, gap = (_a = label.gap) != null ? _a : 8;
+    const candidates = [
+      { x: p.x - w / 2, y: p.y + r + gap },
+      { x: p.x - w / 2, y: p.y - r - gap - h },
+      { x: p.x + r + gap, y: p.y - h / 2 },
+      { x: p.x - r - gap - w, y: p.y - h / 2 }
+    ];
+    const candidate = candidates.map(({ x, y }) => ({ left: x, right: x + w, top: y, bottom: y + h })).find((rect) => !occupied.collides(rect, void 0, 4));
+    if (candidate) {
+      result.set(label.key, candidate);
+      occupied.set("label:" + label.key, candidate);
+    }
+  }
+  return result;
+}
+
+// src/thought-reading-layout.ts
+var finite2 = (point) => !!point && Number.isFinite(point.x) && Number.isFinite(point.y);
+var ThoughtReadingLayout = class {
+  constructor() {
+    __publicField(this, "contexts", /* @__PURE__ */ new Map());
+  }
+  clear() {
+    this.contexts.clear();
+  }
+  move(thought, key, point) {
+    const context = this.contexts.get(thought);
+    if (context == null ? void 0 : context.positions[key]) context.positions[key] = { ...point };
+  }
+  sync(thought, nodes, steps, extent) {
+    var _a, _b, _c, _d;
+    const byId = new Map(nodes.map((node) => [node.path, node]));
+    const visits = steps.filter((step) => step.thoughtPath === thought && byId.has(step.key));
+    const ids = [...new Set(visits.map((step) => step.key))];
+    if (!ids.length) return {};
+    const active = new Set(ids), order = new Map(ids.map((id, index) => [id, index]));
+    const outgoing = new Map(ids.map((id) => [id, /* @__PURE__ */ new Set()]));
+    const incoming = new Map(ids.map((id) => [id, /* @__PURE__ */ new Set()]));
+    for (let index = 1; index < visits.length; index++) {
+      const a = visits[index - 1], b = visits[index];
+      if (a.pathIndex !== b.pathIndex || a.key === b.key) continue;
+      outgoing.get(a.key).add(b.key);
+      incoming.get(b.key).add(a.key);
+    }
+    const sizes = new Map(nodes.map((node) => [node.path, extent(node)]));
+    const signature = JSON.stringify([visits.map((step) => [step.key, step.pathIndex]), ids.map((id) => sizes.get(id))]);
+    let context = this.contexts.get(thought);
+    if ((context == null ? void 0 : context.signature) === signature) return context.positions;
+    const root = byId.get(ids[0]);
+    if (!context) {
+      context = { anchor: finite2(root) ? { x: root.x, y: root.y } : { x: 0, y: 0 }, positions: {}, sizes: {}, signature: "" };
+      this.contexts.set(thought, context);
+    }
+    const seen = /* @__PURE__ */ new Set(), finished = [];
+    for (const root2 of ids) {
+      if (seen.has(root2)) continue;
+      const stack = [[root2, false]];
+      while (stack.length) {
+        const [id, done] = stack.pop();
+        if (done) {
+          finished.push(id);
+          continue;
+        }
+        if (seen.has(id)) continue;
+        seen.add(id);
+        stack.push([id, true]);
+        for (const next of outgoing.get(id)) if (!seen.has(next)) stack.push([next, false]);
+      }
+    }
+    const component = /* @__PURE__ */ new Map();
+    for (const root2 of finished.reverse()) {
+      if (component.has(root2)) continue;
+      const group = component.size, stack = [root2];
+      component.set(root2, group);
+      while (stack.length) for (const previous of incoming.get(stack.pop())) {
+        if (!component.has(previous)) {
+          component.set(previous, group);
+          stack.push(previous);
+        }
+      }
+    }
+    const forward = new Map(ids.map((id) => [id, [...outgoing.get(id)].filter((next) => component.get(id) !== component.get(next) || order.get(id) < order.get(next))]));
+    const members = /* @__PURE__ */ new Map();
+    for (const id of ids) {
+      const group = component.get(id);
+      if (!members.has(group)) members.set(group, []);
+      members.get(group).push(id);
+    }
+    const cycleOffset = /* @__PURE__ */ new Map();
+    for (const group of members.values()) if (group.length > 2) group.forEach((id, index) => cycleOffset.set(id, Math.sin(index / group.length * Math.PI * 2) * 120));
+    const parents = new Map(ids.map((id) => [id, []]));
+    for (const [from, targets] of forward) for (const to of targets) parents.get(to).push(from);
+    const pending = new Map(ids.map((id) => [id, parents.get(id).length]));
+    const rank = new Map(ids.map((id) => [id, 0]));
+    const queue = ids.filter((id) => !pending.get(id));
+    for (let index = 0; index < queue.length; index++) {
+      const id = queue[index];
+      for (const next of forward.get(id)) {
+        rank.set(next, Math.max(rank.get(next), rank.get(id) + 1));
+        pending.set(next, pending.get(next) - 1);
+        if (!pending.get(next)) queue.push(next);
+      }
+    }
+    const widths = [];
+    for (const id of ids) widths[rank.get(id)] = Math.max((_a = widths[rank.get(id)]) != null ? _a : 0, sizes.get(id).width);
+    const columns = [context.anchor.x];
+    for (let index = 1; index < widths.length; index++) columns[index] = columns[index - 1] + Math.max(220, (widths[index - 1] + widths[index]) / 2 + 70);
+    const occupied = new RectIndex();
+    const rect = (point, size) => ({
+      left: point.x - size.width / 2,
+      right: point.x + size.width / 2,
+      top: point.y + size.top,
+      bottom: point.y + size.bottom
+    });
+    for (const node of nodes) if (!active.has(node.path) && finite2(node)) occupied.set(node.path, rect(node, sizes.get(node.path)));
+    for (const id of ids) if (context.positions[id]) occupied.set(id, rect(context.positions[id], (_b = context.sizes[id]) != null ? _b : sizes.get(id)));
+    const positions = {};
+    for (const id of queue) {
+      const size = sizes.get(id), old = context.positions[id];
+      const predecessors = parents.get(id).map((key) => ({ point: positions[key], size: sizes.get(key) }));
+      const required = Math.max(-Infinity, ...predecessors.map((parent) => parent.point.x + (parent.size.width + size.width) / 2 + 70));
+      const x = Math.max((_c = old == null ? void 0 : old.x) != null ? _c : columns[rank.get(id)], required);
+      const preferredY = (_d = old == null ? void 0 : old.y) != null ? _d : cycleOffset.has(id) ? context.anchor.y + cycleOffset.get(id) : predecessors.length ? predecessors.reduce((sum, parent) => sum + parent.point.y, 0) / predecessors.length : context.anchor.y;
+      const stride = Math.max(100, size.bottom - size.top + 24);
+      let point = { x, y: preferredY }, attempt = 0;
+      while (occupied.collides(rect(point, size), id, 16)) {
+        attempt++;
+        point = { x, y: preferredY + Math.ceil(attempt / 2) * stride * (attempt % 2 ? 1 : -1) };
+      }
+      positions[id] = point;
+      occupied.set(id, rect(point, size));
+    }
+    context.positions = positions;
+    context.sizes = Object.fromEntries(ids.map((id) => [id, sizes.get(id)]));
+    context.signature = signature;
+    return positions;
+  }
+};
+
+// src/reading-transition.ts
+var ReadingTransition = class {
+  constructor() {
+    __publicField(this, "positions", /* @__PURE__ */ new Map());
+    __publicField(this, "strength", 0);
+    __publicField(this, "lastTime");
+    __publicField(this, "targets", {});
+    __publicField(this, "offset", { x: 0, y: 0 });
+  }
+  get(key) {
+    return this.positions.get(key);
+  }
+  hold(key, point) {
+    this.positions.set(key, { ...point });
+  }
+  clear() {
+    this.positions.clear();
+    this.strength = 0;
+    this.lastTime = void 0;
+    this.targets = {};
+  }
+  step(nodes, targets, requested, zoom, time, offset = { x: 0, y: 0 }, held, reducedMotion = false) {
+    var _a;
+    const elapsed = Math.min(48, Math.max(1, this.lastTime === void 0 ? 16 : time - this.lastTime));
+    this.lastTime = time;
+    if (requested) {
+      this.targets = targets;
+      this.offset = offset;
+    }
+    const t = Math.max(0, Math.min(1, (zoom - 0.45) / 0.45));
+    const goal = requested ? t * t * (3 - 2 * t) : 0;
+    this.strength = reducedMotion ? goal : this.strength + (goal - this.strength) * (1 - Math.exp(-elapsed / 110));
+    if (Math.abs(this.strength - goal) < 1e-3) this.strength = goal;
+    let moving = this.strength !== goal;
+    const alive = new Set(nodes.map((node) => node.path));
+    for (const key of this.positions.keys()) if (!alive.has(key)) this.positions.delete(key);
+    for (const node of nodes) {
+      if (!Number.isFinite(node.x) || !Number.isFinite(node.y)) continue;
+      if ((held == null ? void 0 : held.key) === node.path) {
+        this.hold(node.path, held.point);
+        continue;
+      }
+      const target = this.targets[node.path];
+      const read = target && { x: target.x + this.offset.x, y: target.y + this.offset.y };
+      const elastic = read && {
+        x: read.x + Math.max(-12, Math.min(12, node.x - read.x)),
+        y: read.y + Math.max(-24, Math.min(24, node.y - read.y))
+      };
+      const desired = elastic ? {
+        x: node.x + (elastic.x - node.x) * this.strength,
+        y: node.y + (elastic.y - node.y) * this.strength
+      } : { x: node.x, y: node.y };
+      const before = (_a = this.positions.get(node.path)) != null ? _a : { x: node.x, y: node.y };
+      const distance = Math.hypot(desired.x - before.x, desired.y - before.y);
+      const fraction = reducedMotion || distance < 0.1 ? 1 : Math.min(1 - Math.exp(-elapsed / 85), 32 * elapsed / 16 / Math.max(0.1, zoom) / distance);
+      const next = { x: before.x + (desired.x - before.x) * fraction, y: before.y + (desired.y - before.y) * fraction };
+      if (Math.hypot(desired.x - next.x, desired.y - next.y) > 0.1) moving = true;
+      else Object.assign(next, desired);
+      this.positions.set(node.path, next);
+    }
+    return moving;
+  }
+};
+
 // src/mind-view-mode.ts
 var VIEW_TYPE = "brainos-graph-view";
 var MindViewMode = class {
@@ -1822,6 +2167,12 @@ var BrainOSGraphView = class extends import_obsidian6.FileView {
     __publicField(this, "edges", []);
     __publicField(this, "thoughtPath", "");
     __publicField(this, "previewedThoughtPath");
+    __publicField(this, "readingLayout", new ThoughtReadingLayout());
+    __publicField(this, "readingPositions", {});
+    __publicField(this, "readingTransition", new ReadingTransition());
+    __publicField(this, "readingRequested", false);
+    __publicField(this, "readingOffset", { x: 0, y: 0 });
+    __publicField(this, "readingButton");
     __publicField(this, "zoom", 1);
     __publicField(this, "pan", { x: 0, y: 0 });
     __publicField(this, "selected");
@@ -1888,6 +2239,7 @@ var BrainOSGraphView = class extends import_obsidian6.FileView {
   }
   async onLoadFile(file) {
     this.closeEditor();
+    this.setReadingMode(false);
     this.file = file;
     this.thoughtPath = file.path;
     this.localCenter = void 0;
@@ -1925,6 +2277,16 @@ var BrainOSGraphView = class extends import_obsidian6.FileView {
     this.controlsButton = tools.createEl("button", { cls: "clickable-icon", attr: { "aria-label": "\u56FE\u8C31\u8BBE\u7F6E", "aria-expanded": "false", title: "\u56FE\u8C31\u8BBE\u7F6E" } });
     (0, import_obsidian6.setIcon)(this.controlsButton, "sliders-horizontal");
     this.controlsButton.onclick = () => this.toggleControls();
+    this.readingButton = tools.createEl("button", { cls: "clickable-icon", attr: { "aria-label": "\u5C55\u5F00\u5F53\u524D\u601D\u8003\u7684\u9605\u8BFB\u5E03\u5C40", "aria-pressed": "false", title: "\u9605\u8BFB\u5E03\u5C40\uFF1A\u7406\u987A\u5F53\u524D\u601D\u8003" } });
+    (0, import_obsidian6.setIcon)(this.readingButton, "workflow");
+    this.readingButton.onclick = () => {
+      if (!this.thoughtPath || this.source !== "thoughts") {
+        new import_obsidian6.Notice("\u8BF7\u5148\u5728\u4FA7\u680F\u9009\u62E9\u4E00\u4EFD\u601D\u8003");
+        return;
+      }
+      this.setReadingMode(!this.readingRequested);
+      this.canvas.focus();
+    };
     this.searchBox = this.contentEl.createDiv({ cls: "brainos-graph-search" });
     this.searchBox.hidden = true;
     this.search = this.searchBox.createEl("input", { type: "search", placeholder: "\u641C\u7D22\u8282\u70B9\u2026", attr: { "aria-label": "\u641C\u7D22\u8282\u70B9" } });
@@ -2039,8 +2401,56 @@ var BrainOSGraphView = class extends import_obsidian6.FileView {
     }
     if (this.selected && !this.nodes.some((node) => node.path === this.selected)) this.selected = void 0;
     if (this.hovered && !this.nodes.some((node) => node.path === this.hovered)) this.hovered = void 0;
-    this.forceLayout.sync(this.nodes, this.edges, this.plugin.layout.positions);
+    this.forceLayout.sync(this.nodes, this.edges, this.plugin.layout.positions, this.source === "thoughts");
+    this.updateReadingLayout();
     this.forceLayout.setSelected(this.selected);
+    this.startLayoutAnimation();
+  }
+  updateReadingLayout() {
+    var _a, _b, _c;
+    if (this.source !== "thoughts" || !this.thoughtPath) {
+      this.readingPositions = {};
+      return;
+    }
+    const ctx = (_b = (_a = this.canvas) == null ? void 0 : _a.getContext) == null ? void 0 : _b.call(_a, "2d");
+    const family = typeof getComputedStyle === "function" && this.canvas ? getComputedStyle(this.canvas).getPropertyValue("--font-interface").trim() || "sans-serif" : "sans-serif";
+    this.readingPositions = this.readingLayout.sync(this.thoughtPath, this.nodes, (_c = this.snapshot.steps) != null ? _c : [], (node) => {
+      var _a2;
+      const radius = nodeScreenRadius((_a2 = node.weight) != null ? _a2 : node.degree, 1, this.graphOptions.nodeSizeMultiplier);
+      const fontSize = 14 + radius / 4;
+      if (ctx) ctx.font = `${fontSize}px ${family}`;
+      const measure = (text) => {
+        var _a3;
+        return (_a3 = ctx == null ? void 0 : ctx.measureText(text).width) != null ? _a3 : Array.from(text).length * fontSize;
+      };
+      const lines = wrapGraphLabel(node.label, measure, 300, 4);
+      return {
+        width: Math.max(radius * 2, ...lines.map(measure)),
+        top: -radius,
+        bottom: radius + 8 + lines.length * fontSize * 1.2
+      };
+    });
+  }
+  displayPoint(point) {
+    var _a;
+    const path = point.path;
+    if (path && ((_a = this.gesture) == null ? void 0 : _a.kind) === "node" && this.gesture.node.path === path) return this.gesture.displayed;
+    return path && this.readingTransition.get(path) || point;
+  }
+  setReadingMode(reading, anchor) {
+    var _a, _b, _c, _d;
+    reading = reading && this.source === "thoughts" && !!this.thoughtPath;
+    if (reading && !this.readingRequested) {
+      const node = (_a = anchor != null ? anchor : this.nodes.find((node2) => node2.path === this.selected)) != null ? _a : this.nodes.find((node2) => !!this.readingPositions[node2.path]);
+      const target = node && this.readingPositions[node.path];
+      const point = node && this.displayPoint(node);
+      this.readingOffset = target && point ? { x: point.x - target.x, y: point.y - target.y } : { x: 0, y: 0 };
+    }
+    this.readingRequested = reading;
+    (_b = this.readingButton) == null ? void 0 : _b.setAttribute("aria-pressed", String(reading));
+    (_c = this.readingButton) == null ? void 0 : _c.setAttribute("aria-label", reading ? "\u6062\u590D\u81EA\u7531\u5E03\u5C40" : "\u5C55\u5F00\u5F53\u524D\u601D\u8003\u7684\u9605\u8BFB\u5E03\u5C40");
+    (_d = this.readingButton) == null ? void 0 : _d.setAttribute("title", reading ? "\u81EA\u7531\u5E03\u5C40\uFF08Esc\uFF09\uFF1A\u6062\u590D\u81EA\u7136\u5206\u5E03" : "\u9605\u8BFB\u5E03\u5C40\uFF1A\u7406\u987A\u5F53\u524D\u601D\u8003");
+    if (this.readingButton) (0, import_obsidian6.setIcon)(this.readingButton, reading ? "network" : "workflow");
     this.startLayoutAnimation();
   }
   previewThought(path) {
@@ -2083,6 +2493,7 @@ var BrainOSGraphView = class extends import_obsidian6.FileView {
     menu.addItem((item) => item.setTitle("\u65B0\u5EFA\u8282\u70B9").setIcon("plus").onClick(() => void this.beginCreate(this.screenToWorld(this.canvas.clientWidth / 2, this.canvas.clientHeight / 2))));
     menu.addItem((item) => item.setTitle("\u5F15\u7528\u5DF2\u6709\u8282\u70B9\u2026").setIcon("link").onClick(() => void this.openReferencePicker()));
     menu.addItem((item) => item.setTitle("\u5EF6\u4F38\u8282\u70B9\uFF08Tab\uFF09").setIcon("git-branch").onClick(() => void this.createRelative(true)));
+    if (this.source === "thoughts" && this.thoughtPath) menu.addItem((item) => item.setTitle(this.readingRequested ? "\u6062\u590D\u81EA\u7531\u5E03\u5C40" : "\u5C55\u5F00\u9605\u8BFB\u5E03\u5C40").setIcon("workflow").onClick(() => this.setReadingMode(!this.readingRequested)));
     menu.addItem((item) => item.setTitle("\u9002\u914D\u56FE\u8C31\uFF08F\uFF09").setIcon("maximize").onClick(() => this.fitToView()));
     menu.addItem((item) => item.setTitle("\u805A\u7126\u5F53\u524D\u7B14\u8BB0").setIcon("focus").onClick(() => this.focusCurrent()));
     if (!this.file && this.source === "vault") menu.addItem((item) => item.setTitle(this.localCenter ? "\u663E\u793A\u5168\u90E8\u7B14\u8BB0" : "\u53EA\u770B\u9009\u4E2D\u8282\u70B9\u7684\u90BB\u57DF").setIcon("network").onClick(() => {
@@ -2158,7 +2569,10 @@ var BrainOSGraphView = class extends import_obsidian6.FileView {
       }));
     };
     panel.createEl("h3", { text: "\u663E\u793A" });
-    slider("\u8282\u70B9\u5927\u5C0F", settings.display.nodeSizeMultiplier, 0.25, 3, 0.05, (value) => settings.display.nodeSizeMultiplier = value);
+    slider("\u8282\u70B9\u5927\u5C0F", settings.display.nodeSizeMultiplier, 0.25, 3, 0.05, (value) => {
+      settings.display.nodeSizeMultiplier = value;
+      this.updateReadingLayout();
+    });
     slider("\u8FDE\u7EBF\u7C97\u7EC6", settings.display.lineSizeMultiplier, 0.1, 5, 0.1, (value) => settings.display.lineSizeMultiplier = value);
     slider("\u6587\u5B57\u6DE1\u51FA\u9608\u503C", settings.display.textFadeMultiplier, -3, 3, 0.1, (value) => settings.display.textFadeMultiplier = value);
     new import_obsidian6.Setting(panel).setName("\u663E\u793A\u7BAD\u5934").addToggle((control) => control.setValue(settings.display.showArrows).onChange((value) => {
@@ -2166,16 +2580,19 @@ var BrainOSGraphView = class extends import_obsidian6.FileView {
       save();
       this.draw();
     }));
-    panel.createEl("h3", { text: "\u529B\u5B66" });
-    const forces = (key, value) => {
-      settings.forces[key] = value;
-      this.forceLayout.configure(graphForces(settings));
-      this.startLayoutAnimation();
-    };
-    slider("\u4E2D\u5FC3\u529B", settings.forces.center, 0, 1, 0.01, (value) => forces("center", value));
-    slider("\u6392\u65A5\u529B", settings.forces.repel, 0, 20, 0.1, (value) => forces("repel", value));
-    slider("\u8FDE\u63A5\u529B", settings.forces.link, 0, 1, 0.01, (value) => forces("link", value));
-    slider("\u8FDE\u63A5\u957F\u5EA6", settings.forces.distance, 30, 500, 1, (value) => forces("distance", value));
+    {
+      panel.createEl("h3", { text: "\u81EA\u7531\u5E03\u5C40" });
+      const forces = (key, value) => {
+        settings.forces[key] = value;
+        this.forceLayout.configure(graphForces(settings));
+        this.startLayoutAnimation();
+      };
+      slider("\u4E2D\u5FC3\u529B", settings.forces.center, 0, 1, 0.01, (value) => forces("center", value));
+      slider("\u6392\u65A5\u529B", settings.forces.repel, 0, 20, 0.1, (value) => forces("repel", value));
+      slider("\u8FDE\u63A5\u529B", settings.forces.link, 0, 1, 0.01, (value) => forces("link", value));
+      slider("\u8FDE\u63A5\u957F\u5EA6", settings.forces.distance, 30, 500, 1, (value) => forces("distance", value));
+    }
+    if (this.source === "thoughts") panel.createDiv({ cls: "setting-item-description", text: "\u9ED8\u8BA4\u81EA\u7531\u5206\u5E03\u3002\u9009\u4E2D\u6216\u7F16\u8F91\u8282\u70B9\u65F6\u67D4\u548C\u5C55\u5F00\u8DEF\u5F84\uFF1B\u70B9\u51FB\u7A7A\u767D\u3001Esc \u6216\u5207\u6362\u5E03\u5C40\u6309\u94AE\u53EF\u6062\u590D\u3002\u62D6\u52A8\u4F1A\u5E26\u52A8\u9644\u8FD1\u8282\u70B9\uFF0C\u4FA7\u680F\u60AC\u505C\u53EA\u9AD8\u4EAE\u3002" });
     panel.createEl("h3", { text: "\u7B5B\u9009" });
     new import_obsidian6.Setting(panel).setName("\u6062\u590D\u9690\u85CF\u7684\u8282\u70B9").addButton((button) => button.setButtonText("\u6062\u590D").onClick(() => {
       settings.hiddenPaths = [];
@@ -2204,6 +2621,8 @@ var BrainOSGraphView = class extends import_obsidian6.FileView {
       this.plugin.layout.graph = defaultGraphOptions();
       this.plugin.layout.graph.source = currentSource;
       this.plugin.layout.positions = {};
+      this.readingLayout.clear();
+      this.readingTransition.clear();
       this.forceLayout.reset();
       this.forceLayout.configure(graphForces(this.plugin.layout.graph));
       (_a2 = this.controls) == null ? void 0 : _a2.remove();
@@ -2214,13 +2633,26 @@ var BrainOSGraphView = class extends import_obsidian6.FileView {
     }));
   }
   startLayoutAnimation() {
-    if (this.closed || this.animationFrame !== void 0 || !this.forceLayout.isRunning) return;
-    this.animationFrame = requestAnimationFrame(() => {
+    if (this.closed || this.animationFrame !== void 0) return;
+    this.animationFrame = requestAnimationFrame((time) => {
+      var _a, _b, _c, _d, _e;
       this.animationFrame = void 0;
       if (this.closed) return;
       this.forceLayout.tick(this.nodes);
+      const gesture = this.gesture;
+      const reducedMotion = (_e = (_d = (_c = (_b = (_a = this.canvas) == null ? void 0 : _a.ownerDocument) == null ? void 0 : _b.defaultView) == null ? void 0 : _c.matchMedia) == null ? void 0 : _d.call(_c, "(prefers-reduced-motion: reduce)").matches) != null ? _e : false;
+      const moving = this.readingTransition.step(
+        this.nodes,
+        this.readingPositions,
+        this.readingRequested,
+        this.zoom,
+        time,
+        this.readingOffset,
+        (gesture == null ? void 0 : gesture.kind) === "node" ? { key: gesture.node.path, point: gesture.displayed } : void 0,
+        reducedMotion
+      );
       this.draw();
-      if (this.forceLayout.isRunning) this.startLayoutAnimation();
+      if (this.forceLayout.isRunning || moving) this.startLayoutAnimation();
       else this.scheduleLayoutSave();
     });
   }
@@ -2269,7 +2701,7 @@ var BrainOSGraphView = class extends import_obsidian6.FileView {
   }
   fitToView() {
     var _a;
-    const points = this.nodes.filter((node) => Number.isFinite(node.x) && Number.isFinite(node.y));
+    const points = this.nodes.map((node) => this.displayPoint(node)).filter((point) => Number.isFinite(point.x) && Number.isFinite(point.y));
     if (!points.length) {
       this.pan = { x: 0, y: 0 };
       this.zoom = 1;
@@ -2286,6 +2718,7 @@ var BrainOSGraphView = class extends import_obsidian6.FileView {
     this.zoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, Math.min((this.canvas.clientWidth - padding) / width, (this.canvas.clientHeight - padding) / height)));
     this.pan = { x: -(minX + maxX) / 2, y: -(minY + maxY) / 2 };
     this.persistViewport();
+    this.startLayoutAnimation();
     this.draw();
     (_a = this.canvas) == null ? void 0 : _a.focus();
   }
@@ -2301,11 +2734,13 @@ var BrainOSGraphView = class extends import_obsidian6.FileView {
       new import_obsidian6.Notice("\u5F53\u524D\u6587\u4EF6\u672A\u51FA\u73B0\u5728\u6240\u9009\u601D\u8003\u56FE\u8C31\u4E2D");
       return;
     }
+    const point = this.displayPoint(node);
+    this.setReadingMode(true, node);
     this.selectedNodes.clear();
     this.selected = node.path;
     this.hovered = node.path;
     this.forceLayout.setSelected(this.selected);
-    this.pan = { x: -node.x, y: -node.y };
+    this.pan = { x: -point.x, y: -point.y };
     this.scheduleLayoutSave();
     this.startLayoutAnimation();
     this.draw();
@@ -2320,6 +2755,7 @@ var BrainOSGraphView = class extends import_obsidian6.FileView {
     this.draw();
   }
   worldToScreen(point) {
+    point = this.displayPoint(point);
     return { x: this.canvas.clientWidth / 2 + (point.x + this.pan.x) * this.zoom, y: this.canvas.clientHeight / 2 + (point.y + this.pan.y) * this.zoom };
   }
   screenToWorld(x, y) {
@@ -2341,7 +2777,7 @@ var BrainOSGraphView = class extends import_obsidian6.FileView {
     return closest;
   }
   draw() {
-    var _a, _b, _c, _d, _e, _f, _g;
+    var _a, _b, _c, _d, _e, _f, _g, _h;
     if (!this.canvas || this.closed) return;
     if (this.hoveredEdge && !this.edges.includes(this.hoveredEdge)) this.clearEdgeHover();
     const ctx = this.canvas.getContext("2d");
@@ -2467,6 +2903,7 @@ var BrainOSGraphView = class extends import_obsidian6.FileView {
     const orderedNodes = this.nodes.filter((node) => node.path !== focus);
     const focusedNode = focus ? byPath.get(focus) : void 0;
     if (focusedNode) orderedNodes.push(focusedNode);
+    const labels = [];
     for (const node of orderedNodes) {
       const point = points.get(node.path), radius = radii.get(node.path);
       if (!Number.isFinite(point.x) || !Number.isFinite(point.y)) continue;
@@ -2497,31 +2934,63 @@ var BrainOSGraphView = class extends import_obsidian6.FileView {
         }
       }
       if (node.path === ((_c = this.draftNode) == null ? void 0 : _c.path) || node.path === ((_d = this.editingNode) == null ? void 0 : _d.path)) continue;
-      const alphaText = isFocus ? 1 : labelAlpha * alpha;
-      if (alphaText <= 1e-3) continue;
-      const baseSize = nodeScreenRadius((_e = node.weight) != null ? _e : node.degree, 1, options.nodeSizeMultiplier);
-      const labelScale = isFocus && zoom < 1 ? 1 : visualScale;
+      const labelFocus = node.path === ((_e = this.hovered) != null ? _e : this.selected);
+      const alphaText = labelFocus ? 1 : labelAlpha * alpha;
+      if (!labelFocus && labelAlpha <= 1e-3) continue;
+      const baseSize = nodeScreenRadius((_f = node.weight) != null ? _f : node.degree, 1, options.nodeSizeMultiplier);
+      const labelScale = labelFocus && zoom < 1 ? 1 : visualScale;
       const fontSize = (14 + baseSize / 4) * labelScale;
-      const textTop = point.y + radius + 5 * labelScale + (isFocus ? 15 : 0);
       const maxWidth = Math.min(300 * labelScale, Math.max(80, width - 24));
       const lineHeight = fontSize * 1.2;
       if (!intersectsViewport({
         left: point.x - maxWidth / 2,
         right: point.x + maxWidth / 2,
-        top: textTop,
-        bottom: textTop + lineHeight * (isFocus ? 8 : 4)
+        top: point.y - radius - lineHeight * 8 - 24,
+        bottom: point.y + radius + lineHeight * 8 + 24
       }, width, height)) continue;
       ctx.font = `${fontSize}px ${fontFamily}`;
-      const lines = wrapGraphLabel(node.label, (value) => ctx.measureText(value).width, maxWidth, isFocus ? 8 : 4);
-      ctx.globalAlpha = alphaText;
+      const lines = wrapGraphLabel(node.label, (value) => ctx.measureText(value).width, maxWidth, labelFocus ? 8 : 4);
+      labels.push({
+        key: node.path,
+        point,
+        radius,
+        width: Math.max(1, ...lines.map((line) => ctx.measureText(line).width)),
+        height: lines.length * lineHeight,
+        priority: labelFocus || isMatch || this.selectedNodes.has(node.path) ? 3 : node.thoughts.includes(this.thoughtPath) ? 2 : 1,
+        gap: Math.max(8, 5 * labelScale + (labelFocus ? 15 : 0)),
+        lines,
+        alpha: alphaText,
+        fontSize,
+        lineHeight
+      });
+    }
+    const labelPositions = placeGraphLabels(labels, this.nodes.flatMap((node) => {
+      const point = points.get(node.path);
+      return Number.isFinite(point.x) && Number.isFinite(point.y) ? [{ key: node.path, point, radius: radii.get(node.path) + 2 }] : [];
+    }));
+    for (const label of labels) {
+      const rect = labelPositions.get(label.key);
+      if (!rect || !intersectsViewport(rect, width, height)) continue;
+      const center = (rect.left + rect.right) / 2;
+      if (Math.abs(center - label.point.x) > 1 || rect.bottom < label.point.y) {
+        ctx.strokeStyle = text;
+        ctx.globalAlpha = label.alpha * 0.3;
+        ctx.lineWidth = 0.5;
+        ctx.beginPath();
+        ctx.moveTo(label.point.x, label.point.y);
+        ctx.lineTo(Math.max(rect.left, Math.min(rect.right, label.point.x)), Math.max(rect.top, Math.min(rect.bottom, label.point.y)));
+        ctx.stroke();
+      }
+      ctx.font = `${label.fontSize}px ${fontFamily}`;
+      ctx.globalAlpha = label.alpha;
       ctx.textAlign = "center";
       ctx.textBaseline = "top";
       ctx.fillStyle = text;
-      lines.forEach((line, index) => ctx.fillText(line, point.x, textTop + index * lineHeight));
+      label.lines.forEach((line, index) => ctx.fillText(line, center, rect.top + index * label.lineHeight));
     }
     for (const key of this.rendererOpacity.keys()) if (!alive.has(key)) this.rendererOpacity.delete(key);
     ctx.globalAlpha = 1;
-    if (((_f = this.gesture) == null ? void 0 : _f.kind) === "box" && this.gesture.moved) {
+    if (((_g = this.gesture) == null ? void 0 : _g.kind) === "box" && this.gesture.moved) {
       const { start, end } = this.gesture;
       ctx.fillStyle = accent;
       ctx.globalAlpha = 0.12;
@@ -2551,7 +3020,7 @@ var BrainOSGraphView = class extends import_obsidian6.FileView {
     if (this.nodes.length) empty == null ? void 0 : empty.remove();
     const selected = this.nodes.find((node) => node.path === this.selected);
     this.positionDraftEditor();
-    this.status.setText(this.draftNode ? "\u8F93\u5165\u8282\u70B9\u6807\u9898 \xB7 Enter \u786E\u8BA4 \xB7 Tab \u786E\u8BA4\u5E76\u5EF6\u4F38 \xB7 Esc \u53D6\u6D88" : this.selectedNodes.size > 1 ? `\u5DF2\u6846\u9009 ${this.selectedNodes.size} \u4E2A\u8282\u70B9 \xB7 \u9000\u683C\u952E\u6279\u91CF\u5220\u9664 \xB7 Esc \u53D6\u6D88` : selected ? `${selected.label}${this.file && selected.ownerPath && selected.ownerPath !== this.file.path ? ` \xB7 \u5F15\u7528\u81EA ${(_g = selected.ownerPath.split("/").pop()) == null ? void 0 : _g.replace(/\.md$/, "")}` : ""} \xB7 Tab \u7EE7\u7EED \xB7 Enter \u540C\u8D77\u70B9\u5206\u652F \xB7 \u7A7A\u683C\u7F16\u8F91\u6807\u9898` : `${this.nodes.length} \u4E2A\u8282\u70B9 \xB7 ${this.edges.length} \u6761\u8FDE\u7EBF`);
+    this.status.setText(this.draftNode ? "\u8F93\u5165\u8282\u70B9\u6807\u9898 \xB7 Enter \u786E\u8BA4 \xB7 Tab \u786E\u8BA4\u5E76\u5EF6\u4F38 \xB7 Esc \u53D6\u6D88" : this.selectedNodes.size > 1 ? `\u5DF2\u6846\u9009 ${this.selectedNodes.size} \u4E2A\u8282\u70B9 \xB7 \u9000\u683C\u952E\u6279\u91CF\u5220\u9664 \xB7 Esc \u53D6\u6D88` : selected ? `${selected.label}${this.file && selected.ownerPath && selected.ownerPath !== this.file.path ? ` \xB7 \u5F15\u7528\u81EA ${(_h = selected.ownerPath.split("/").pop()) == null ? void 0 : _h.replace(/\.md$/, "")}` : ""} \xB7 Tab \u7EE7\u7EED \xB7 Enter \u540C\u8D77\u70B9\u5206\u652F \xB7 \u7A7A\u683C\u7F16\u8F91\u6807\u9898` : `${this.nodes.length} \u4E2A\u8282\u70B9 \xB7 ${this.edges.length} \u6761\u8FDE\u7EBF`);
   }
   onPointerDown(event) {
     if (event.pointerType === "touch") this.touchPoints.set(event.pointerId, event);
@@ -2575,8 +3044,9 @@ var BrainOSGraphView = class extends import_obsidian6.FileView {
       if (node && event.altKey && !node.placeholder) this.gesture = { ...base, kind: "link", node, end: point };
       else if (node) {
         const world = this.screenToWorld(point.x, point.y);
-        this.gesture = { ...base, kind: "node", node, offset: { x: node.x - world.x, y: node.y - world.y } };
-        this.forceLayout.pin(node.path, { x: node.x, y: node.y });
+        const displayed = this.displayPoint(node);
+        this.gesture = { ...base, kind: "node", node, displayed: { ...displayed }, offset: { x: displayed.x - world.x, y: displayed.y - world.y } };
+        this.readingTransition.hold(node.path, displayed);
       } else this.gesture = { ...base, kind: "box", end: point, edge: node ? void 0 : this.edgeAt(point.x, point.y) };
     }
     this.forceLayout.setSelected(this.selected);
@@ -2609,6 +3079,7 @@ var BrainOSGraphView = class extends import_obsidian6.FileView {
     }
     const gesture = this.gesture;
     if (event.pointerId !== gesture.pointer) return;
+    const wasMoved = gesture.moved;
     if (Math.hypot(point.x - gesture.start.x, point.y - gesture.start.y) > 4) gesture.moved = true;
     if (!gesture.moved) return;
     this.canvas.addClass(gesture.kind === "box" ? "is-selecting" : "is-dragging");
@@ -2624,9 +3095,17 @@ var BrainOSGraphView = class extends import_obsidian6.FileView {
       this.forceLayout.setSelected(this.selected);
     } else if (gesture.kind === "node") {
       const world = this.screenToWorld(point.x, point.y);
-      gesture.node.x = world.x + gesture.offset.x;
-      gesture.node.y = world.y + gesture.offset.y;
+      const next = { x: world.x + gesture.offset.x, y: world.y + gesture.offset.y };
+      if (!wasMoved) {
+        this.setReadingMode(false);
+        this.forceLayout.pin(gesture.node.path, next);
+      }
+      gesture.displayed = next;
+      this.readingTransition.hold(gesture.node.path, next);
+      gesture.node.x = next.x;
+      gesture.node.y = next.y;
       this.forceLayout.movePinned(gesture.node.path, { x: gesture.node.x, y: gesture.node.y });
+      this.startLayoutAnimation();
     } else if (gesture.kind === "pan") {
       this.pan.x += (point.x - gesture.last.x) / this.zoom;
       this.pan.y += (point.y - gesture.last.y) / this.zoom;
@@ -2653,7 +3132,9 @@ var BrainOSGraphView = class extends import_obsidian6.FileView {
       return;
     }
     if (!gesture.moved) {
+      if (gesture.kind === "node" && gesture.node.thoughts.includes(this.thoughtPath)) this.setReadingMode(true, gesture.node);
       if (gesture.kind === "box") {
+        this.setReadingMode(false);
         const edge = gesture.edge;
         if (edge && this.edges.includes(edge)) void this.disconnectEdge(edge);
       }
@@ -2719,6 +3200,7 @@ var BrainOSGraphView = class extends import_obsidian6.FileView {
     const nextZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, this.touchPan.zoom * distance / this.touchPan.distance));
     this.zoom = nextZoom;
     this.pan = { x: (midpoint.x - this.canvas.clientWidth / 2) / nextZoom - this.touchPan.start.x, y: (midpoint.y - this.canvas.clientHeight / 2) / nextZoom - this.touchPan.start.y };
+    this.startLayoutAnimation();
     this.scheduleLayoutSave();
     this.draw();
   }
@@ -2760,6 +3242,7 @@ var BrainOSGraphView = class extends import_obsidian6.FileView {
       const after = this.screenToWorld(this.zoomAnchor.x, this.zoomAnchor.y);
       this.pan.x += after.x - before.x;
       this.pan.y += after.y - before.y;
+      this.startLayoutAnimation();
       this.draw();
       this.scheduleLayoutSave();
       if (this.targetZoom !== void 0) this.animateZoom();
@@ -2820,6 +3303,7 @@ var BrainOSGraphView = class extends import_obsidian6.FileView {
       this.selectedNodes.clear();
       this.selected = void 0;
       this.forceLayout.setSelected(void 0);
+      this.setReadingMode(false);
       this.draw();
     }
   }
@@ -2852,7 +3336,8 @@ var BrainOSGraphView = class extends import_obsidian6.FileView {
       while (index >= 0 && visits[index].key !== node.path) index--;
       parent = index > 0 && visits[index - 1].pathIndex === visits[index].pathIndex ? visits[index - 1].key : void 0;
     }
-    await this.beginCreate({ x: node.x + (child ? 150 : 0), y: node.y + (child ? 0 : 100) }, parent, thought, !child);
+    const displayed = this.displayPoint(node);
+    await this.beginCreate({ x: displayed.x + (child ? 240 : 0), y: displayed.y + (child ? 0 : 140) }, parent, thought, !child);
   }
   async insertParent() {
     var _a, _b, _c, _d;
@@ -2872,7 +3357,8 @@ var BrainOSGraphView = class extends import_obsidian6.FileView {
       return;
     }
     const parentNode = this.nodes.find((item) => item.path === parent.key);
-    const point = parentNode ? { x: (node.x + parentNode.x) / 2, y: (node.y + parentNode.y) / 2 } : { x: node.x - 150, y: node.y };
+    const displayed = this.displayPoint(node), parentPoint = parentNode && this.displayPoint(parentNode);
+    const point = parentPoint ? { x: (displayed.x + parentPoint.x) / 2, y: (displayed.y + parentPoint.y) / 2 } : { x: displayed.x - 240, y: displayed.y };
     await this.beginCreate(point, parent.key, thought, false, { child: node.path, parent: parent.key, ordinal: child.ordinal });
   }
   async beginCreate(point, parent, target = this.editingThought(), newPath = false, insertion) {
@@ -2889,13 +3375,13 @@ var BrainOSGraphView = class extends import_obsidian6.FileView {
     }
     this.closeEditor();
     this.selectedNodes.clear();
+    this.setReadingMode(true, this.nodes.find((node) => node.path === parent));
     const draft = { path: `draft:${crypto.randomUUID()}`, label: "", openPath: "", degree: parent ? 1 : 0, thoughts: target ? [target] : [], kind: "note", ...point };
     this.draftNode = draft;
     this.draftParent = parent;
     this.draftChild = insertion == null ? void 0 : insertion.child;
     this.filterSnapshot();
     this.selected = draft.path;
-    this.forceLayout.sync(this.nodes, this.edges, this.plugin.layout.positions);
     this.forceLayout.pin(draft.path, point);
     this.forceLayout.setSelected(draft.path);
     const form = this.contentEl.createEl("form", { cls: "brainos-node-title-editor" });
@@ -2932,6 +3418,7 @@ var BrainOSGraphView = class extends import_obsidian6.FileView {
       event.preventDefault();
       if (action === "cancel") {
         this.closeEditor();
+        this.setReadingMode(false);
         this.draw();
         return;
       }
@@ -2974,6 +3461,7 @@ var BrainOSGraphView = class extends import_obsidian6.FileView {
       if (title.value.trim()) form.requestSubmit();
       else {
         this.closeEditor();
+        this.setReadingMode(false);
         this.draw();
       }
     });
@@ -3009,6 +3497,7 @@ var BrainOSGraphView = class extends import_obsidian6.FileView {
       this.editingNode = node;
       this.selected = node.path;
       this.hovered = node.path;
+      if (node.thoughts.includes(this.thoughtPath)) this.setReadingMode(true, node);
       this.forceLayout.setSelected(node.path);
       const form = this.contentEl.createEl("form", { cls: "brainos-node-title-editor" });
       this.editor = form;
@@ -3054,6 +3543,7 @@ var BrainOSGraphView = class extends import_obsidian6.FileView {
         event.preventDefault();
         if (action === "cancel") {
           this.closeEditor();
+          this.setReadingMode(false);
           this.draw();
           return;
         }
@@ -3095,6 +3585,7 @@ var BrainOSGraphView = class extends import_obsidian6.FileView {
         if (title.value.trim()) form.requestSubmit();
         else {
           this.closeEditor();
+          this.setReadingMode(false);
           this.draw();
         }
       });
@@ -3132,6 +3623,7 @@ var BrainOSGraphView = class extends import_obsidian6.FileView {
   }
   cancelNodeEditing() {
     this.closeEditor();
+    this.setReadingMode(false);
     this.draw();
   }
   closeEditor() {
@@ -3339,7 +3831,10 @@ var BrainOSGraphView = class extends import_obsidian6.FileView {
       menu.addItem((item) => item.setTitle("\u6253\u5F00\u6765\u6E90 Markdown").setIcon("file-text").onClick(() => void this.app.workspace.openLinkText(node.openPath, "", false)));
       menu.addItem((item) => item.setTitle("\u5F15\u7528\u5DF2\u6709\u8282\u70B9\u2026").setIcon("link").onClick(() => void this.openReferencePicker()));
       menu.addItem((item) => item.setTitle("\u5EF6\u4F38\u8282\u70B9\uFF08Tab\uFF09").setIcon("git-branch").onClick(() => void this.createRelative(true)));
-      menu.addItem((item) => item.setTitle("\u4ECE\u8FD9\u91CC\u53E6\u5F00\u4E00\u8DEF").setIcon("git-fork").onClick(() => void this.beginCreate({ x: node.x + 150, y: node.y + 100 }, node.path, this.editingThought(node), true)));
+      menu.addItem((item) => item.setTitle("\u4ECE\u8FD9\u91CC\u53E6\u5F00\u4E00\u8DEF").setIcon("git-fork").onClick(() => {
+        const point = this.displayPoint(node);
+        void this.beginCreate({ x: point.x + 240, y: point.y + 140 }, node.path, this.editingThought(node), true);
+      }));
       menu.addItem((item) => {
         var _a;
         return item.setTitle(this.source === "vault" ? "\u4ECE\u56FE\u8C31\u9690\u85CF" : node.ownerPath === ((_a = this.file) == null ? void 0 : _a.path) ? "\u5220\u9664\u6B64\u8282\u70B9\u2026" : "\u4ECE\u5F53\u524D\u601D\u8003\u79FB\u9664\u5F15\u7528\u2026").setIcon("unlink").onClick(() => this.removeNode(node));

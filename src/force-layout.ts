@@ -47,6 +47,9 @@ export class ForceLayout {
   private alpha = 0;
   private alphaTarget = 0;
   private options: ForceOptions = { ...DEFAULT_FORCE_OPTIONS };
+  private local = false;
+  private active = new Set<string>();
+  private rests = new Map<string, Point>();
 
   private static readonly alphaDecay = 1 - Math.pow(0.001, 1 / 300);
   private static readonly alphaMin = 0.001;
@@ -67,15 +70,23 @@ export class ForceLayout {
     }
     const changed = Object.keys(next).some(key => next[key as keyof ForceOptions] !== this.options[key as keyof ForceOptions]);
     this.options = next;
-    if (changed) this.reheat(0.3);
+    if (changed) {
+      if (this.local) this.activateLocal(this.particles.map(node => node.id));
+      this.reheat(0.3);
+    }
   }
 
   reset() {
     this.particles = []; this.byId.clear(); this.links = [];
     this.topology = ""; this.alpha = 0; this.alphaTarget = 0;
+    this.active.clear(); this.rests.clear();
   }
 
-  sync(nodes: readonly GraphNode[], edges: readonly GraphEdge[], saved: Record<string, Point>) {
+  sync(nodes: readonly GraphNode[], edges: readonly GraphEdge[], saved: Record<string, Point>, local = false) {
+    const wasLocal = this.local;
+    this.local = local;
+    const oldIds = new Set(this.byId.keys());
+    const oldLinks = new Map(this.links.map(link => [JSON.stringify([link.source.id, link.target.id]), [link.source.id, link.target.id]]));
     const ids = [...new Set(nodes.map(node => node.path))].sort();
     const idSet = new Set(ids);
     const uniqueEdges = new Map<string, GraphEdge>();
@@ -87,7 +98,7 @@ export class ForceLayout {
     const changed = topology !== this.topology;
     const firstGraph = this.particles.length === 0;
     this.topology = topology;
-    for (const id of this.byId.keys()) if (!idSet.has(id)) this.byId.delete(id);
+    for (const id of this.byId.keys()) if (!idSet.has(id)) { this.byId.delete(id); this.active.delete(id); this.rests.delete(id); }
 
     const nodeById = new Map(nodes.map(node => [node.path, node]));
     const adjacency = new Map<string, string[]>();
@@ -129,18 +140,50 @@ export class ForceLayout {
       const source = this.byId.get(edge.from)!, target = this.byId.get(edge.to)!;
       return { source, target, bias: source.degree / (source.degree + target.degree), strength: 1 / Math.min(source.degree, target.degree) };
     });
+    for (const particle of this.particles) if (!this.rests.has(particle.id)) this.rests.set(particle.id, { x: particle.x, y: particle.y });
     this.alphaTarget = this.particles.some(particle => particle.fixed) ? 0.3 : 0;
     if (!this.particles.length) this.alpha = 0;
-    else if (changed) this.reheat(firstGraph ? 1 : 0.3);
+    else if (local) {
+      if (firstGraph || !wasLocal) { this.alpha = 0; this.active.clear(); this.activateLocal(added); }
+      else if (changed) {
+        const affected = new Set(ids.filter(id => !oldIds.has(id)));
+        for (const [key, edge] of sortedEdges) if (!oldLinks.has(key)) { affected.add(edge.from); affected.add(edge.to); }
+        for (const [key, endpoints] of oldLinks) if (!uniqueEdges.has(key)) for (const id of endpoints) if (idSet.has(id)) affected.add(id);
+        this.activateLocal([...affected]);
+      }
+      if (this.active.size && changed) this.reheat(0.3);
+    } else if (changed || wasLocal) this.reheat(firstGraph ? 1 : 0.3);
     this.copyToNodes(nodes);
   }
 
   /** Selection affects rendering only; it must not attract the whole graph. */
   setSelected(_path: string | undefined) {}
 
+  private activateLocal(ids: string[]) {
+    if (!this.local || !ids.length) return;
+    if (ids.length >= this.particles.length) { for (const node of this.particles) this.active.add(node.id); return; }
+    const region = new Set(ids.filter(id => this.byId.has(id)));
+    const adjacency = new Map<string, Set<string>>();
+    for (const link of this.links) {
+      if (!adjacency.has(link.source.id)) adjacency.set(link.source.id, new Set());
+      if (!adjacency.has(link.target.id)) adjacency.set(link.target.id, new Set());
+      adjacency.get(link.source.id)!.add(link.target.id); adjacency.get(link.target.id)!.add(link.source.id);
+    }
+    let frontier = [...region];
+    for (let depth = 0; depth < 2; depth++) {
+      const next: string[] = [];
+      for (const id of frontier) for (const other of adjacency.get(id) ?? []) if (!region.has(other)) { region.add(other); next.push(other); }
+      frontier = next;
+    }
+    const centers = ids.flatMap(id => this.byId.get(id) ?? []), radius = Math.max(180, this.options.linkDistance * 1.5);
+    for (const node of this.particles) if (centers.some(center => Math.hypot(node.x - center.x, node.y - center.y) < radius)) region.add(node.id);
+    for (const id of region) this.active.add(id);
+  }
+
   pin(path: string, position: Point) {
     const particle = this.byId.get(path);
     if (!particle || !validPoint(position)) return;
+    this.activateLocal([path]);
     particle.fixed = { ...position }; particle.x = position.x; particle.y = position.y;
     particle.vx = 0; particle.vy = 0; this.alphaTarget = 0.3; this.reheat(0.3);
   }
@@ -150,11 +193,13 @@ export class ForceLayout {
     if (!particle?.fixed || !validPoint(position)) return;
     particle.fixed = { ...position }; particle.x = position.x; particle.y = position.y;
     particle.vx = 0; particle.vy = 0; this.alphaTarget = 0.3; this.reheat(0.3);
+    this.activateLocal([path]);
   }
 
   unpin(path: string) {
     const particle = this.byId.get(path);
     if (!particle?.fixed) return;
+    this.rests.set(path, { ...particle.fixed });
     particle.fixed = undefined; particle.vx = 0; particle.vy = 0;
     this.alphaTarget = this.particles.some(node => node.fixed) ? 0.3 : 0;
     this.reheat(0.3);
@@ -165,8 +210,11 @@ export class ForceLayout {
   tick(nodes: readonly GraphNode[]): boolean {
     if (!this.isRunning) { this.copyToNodes(nodes); return false; }
     this.alpha += (this.alphaTarget - this.alpha) * ForceLayout.alphaDecay;
-    const center = this.options.centerStrength * this.alpha;
-    for (const particle of this.particles) { particle.vx -= particle.x * center; particle.vy -= particle.y * center; }
+    const center = this.options.centerStrength * this.alpha * (this.local ? 0.05 : 1);
+    for (const particle of this.particles) {
+      const rest = this.local ? this.rests.get(particle.id)! : { x: 0, y: 0 };
+      particle.vx -= (particle.x - rest.x) * center; particle.vy -= (particle.y - rest.y) * center;
+    }
     for (const link of this.links) {
       const a = link.source, b = link.target;
       let dx = b.x + b.vx - a.x - a.vx, dy = b.y + b.vy - a.y - a.vy;
@@ -174,6 +222,10 @@ export class ForceLayout {
       const length = Math.hypot(dx, dy);
       const factor = (length - this.options.linkDistance) / length * this.alpha * this.options.linkStrength * link.strength;
       dx *= factor; dy *= factor;
+      if (this.local) {
+        const scale = Math.min(0.35, 16 * this.alpha / Math.max(0.001, Math.hypot(dx, dy)));
+        dx *= scale; dy *= scale;
+      }
       b.vx -= dx * link.bias; b.vy -= dy * link.bias;
       a.vx += dx * (1 - link.bias); a.vy += dy * (1 - link.bias);
     }
@@ -186,8 +238,14 @@ export class ForceLayout {
     for (const particle of this.particles) {
       if (particle.fixed) {
         particle.x = particle.fixed.x; particle.y = particle.fixed.y; particle.vx = 0; particle.vy = 0;
+      } else if (this.local && !this.active.has(particle.id)) {
+        particle.vx = 0; particle.vy = 0;
       } else {
         particle.vx *= ForceLayout.damping; particle.vy *= ForceLayout.damping;
+        if (this.local) {
+          const scale = Math.min(1, 8 / Math.max(0.001, Math.hypot(particle.vx, particle.vy)));
+          particle.vx *= scale; particle.vy *= scale;
+        }
         particle.x += particle.vx; particle.y += particle.vy;
         // Corrupt saved coordinates and extreme custom forces cannot poison
         // subsequent frames. This is a safety boundary, not a normal speed cap.
@@ -197,7 +255,7 @@ export class ForceLayout {
         }
       }
     }
-    if (this.alphaTarget === 0 && this.alpha < ForceLayout.alphaMin) this.alpha = 0;
+    if (this.alphaTarget === 0 && this.alpha < ForceLayout.alphaMin) { this.alpha = 0; this.active.clear(); }
     this.copyToNodes(nodes);
     return this.isRunning;
   }

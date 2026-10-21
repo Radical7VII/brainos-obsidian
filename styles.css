@@ -6,7 +6,7 @@
 .brainos-graph-tools { position: absolute; z-index: 2; top: 12px; right: 12px; display: flex; gap: 4px; }
 .brainos-graph-tools .clickable-icon, .brainos-controls-heading .clickable-icon { display: flex; align-items: center; justify-content: center; width: 30px; height: 30px; padding: 6px; border: 0; border-radius: var(--radius-s, 5px); box-shadow: none; color: var(--text-muted); background: var(--background-primary); cursor: pointer; }
 .brainos-graph-tools .clickable-icon:hover, .brainos-controls-heading .clickable-icon:hover { color: var(--text-normal); background: var(--background-modifier-hover); }
-.brainos-graph-tools .clickable-icon[aria-expanded="true"] { color: var(--interactive-accent); }
+.brainos-graph-tools .clickable-icon[aria-expanded="true"], .brainos-graph-tools .clickable-icon[aria-pressed="true"] { color: var(--interactive-accent); }
 .brainos-graph-tools svg, .brainos-controls-heading svg { width: 16px; height: 16px; }
 .brainos-graph-search { position: absolute; z-index: 3; top: 12px; right: 84px; width: min(260px, calc(100% - 108px)); }
 .brainos-graph-search[hidden] { display: none; }

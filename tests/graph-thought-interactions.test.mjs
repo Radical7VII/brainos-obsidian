@@ -46,6 +46,8 @@ async function fixture(text,path='思考.md'){
     activeSession:session,recordSessionStep:key=>session.stepKeys.push(key),saveLayout:async()=>{},refreshViews(){}};
   const element=new Element(),view=new BrainOSGraphView({app,element},plugin);view.file=file;view.thoughtPath=file.path;
   view.canvas=new Element('canvas');view.startLayoutAnimation=()=>{};view.draw=()=>{};view.positionDraftEditor=()=>{};view.scheduleLayoutSave=()=>{};
+  // Storage/editor tests control geometry explicitly; reading geometry has its own integration cases below.
+  view.updateReadingLayout=()=>{};
   view.refresh=async()=>{view.snapshot=await buildThoughtSnapshot(app,file);view.filterSnapshot();};
   view.addMarkdownPreviewToggle=()=>{};
   await view.refresh();
@@ -582,4 +584,84 @@ test('active thought uses normal foreground; selection, edge hover and preview u
     theme['--interactive-accent']='#33aaff';assert.ok(render().every(paint=>paint.color==='#33aaff'));
     view.previewThought();assert.ok(render().every(paint=>paint.color==='#ffffff'));
   }finally{globalThis.window=oldWindow;globalThis.getComputedStyle=oldStyle;}
+});
+
+async function readingFixture(){
+  const f=await sharedFixture(),saved={};
+  f.view.nodes.forEach((node,index)=>saved[node.path]={x:index===0?-250:index===3?1800:-1000-index*40,y:index===3?1400:0});
+  Object.assign(f.plugin.layout.positions,saved);
+  const calls=[];
+  f.view.forceLayout.sync=(nodes,edges,positions,stable)=>{
+    calls.push(stable);
+    for(const node of nodes){const point=saved[node.path]??positions[node.path];if(point)Object.assign(node,point);else if(!Number.isFinite(node.x))Object.assign(node,{x:0,y:0});}
+  };
+  f.view.updateReadingLayout=BrainOSGraphView.prototype.updateReadingLayout.bind(f.view);
+  await f.view.refresh();
+  f.view.setReadingMode(true);
+  for(let i=0;i<180;i++)f.view.readingTransition.step(f.view.nodes,f.view.readingPositions,true,1,i*16,f.view.readingOffset);
+  return {...f,calls};
+}
+test('animated reading positions drive hit testing; dragging follows the pointer and returns to free layout',async()=>{
+  const f=await readingFixture(),b=f.view.nodes.find(node=>node.label==='B');
+  const before=structuredClone(f.view.readingPositions),displayed={...f.view.displayPoint(b)};
+  assert.ok(before[f.key('A')].x<before[f.key('B')].x&&before[f.key('B')].x<before[f.key('C')].x);
+  const screen=f.view.worldToScreen(b);assert.equal(f.view.nodeAt(screen.x,screen.y),b);
+  const a=f.view.nodes.find(node=>node.label==='A'),pa=f.view.worldToScreen(a);
+  const edge=f.view.edgeAt((pa.x+screen.x)/2,(pa.y+screen.y)/2);assert.equal(edge.from,a.path);assert.equal(edge.to,b.path);
+  f.view.onPointerDown(pointerAt(screen.x,screen.y));f.view.onPointerMove(pointerAt(screen.x+70,screen.y+40));f.view.onPointerUp(pointerAt(screen.x+70,screen.y+40));
+  assert.deepEqual(f.view.displayPoint(b),{x:displayed.x+70,y:displayed.y+40});
+  assert.deepEqual({x:b.x,y:b.y},{x:displayed.x+70,y:displayed.y+40});
+  assert.equal(f.view.readingRequested,false);
+  for(const key of [f.key('A'),f.key('C')])assert.deepEqual(f.view.readingPositions[key],before[key]);
+  assert.ok(f.calls.every(Boolean));
+});
+test('sidebar preview never recalculates reading geometry or reheats the shared layout',async()=>{
+  const f=await readingFixture(),before=structuredClone(f.view.readingPositions),base=f.view.nodes.map(node=>({path:node.path,x:node.x,y:node.y})),calls=f.calls.length;
+  f.view.previewThought('Thoughts/sub/B.md');f.view.previewThought('Thoughts/A.md');f.view.previewThought();
+  assert.deepEqual(f.view.readingPositions,before);assert.equal(f.calls.length,calls);
+  assert.deepEqual(f.view.nodes.map(node=>({path:node.path,x:node.x,y:node.y})),base);
+});
+test('continuing a thought grows to the right while preserving old reading positions and distant background',async()=>{
+  const f=await readingFixture(),before=structuredClone(f.view.readingPositions);
+  const distant=f.view.nodes.find(node=>node.label==='D'),background={x:distant.x,y:distant.y};
+  f.view.selected=f.key('C');await f.view.createRelative(true);
+  assert.ok(f.view.draftNode.x>before[f.key('C')].x);
+  f.view.editor.find('input')[0].value='Next';f.view.editor.requestSubmit();await settle(f.view);
+  for(const key of Object.keys(before))assert.deepEqual(f.view.readingPositions[key],before[key]);
+  assert.ok(f.view.readingPositions[f.key('Next')].x>before[f.key('C')].x);
+  const after=f.view.nodes.find(node=>node.label==='D');assert.deepEqual({x:after.x,y:after.y},background);
+  assert.ok(f.calls.every(Boolean));
+});
+
+test('screen-space title avoidance keeps preview geometry unchanged even in a crowded graph',async()=>{
+  const f=await sharedFixture(),view=f.view;
+  view.nodes.forEach((node,i)=>{node.x=(i%3)*45-45;node.y=Math.floor(i/3)*45;node.label='Long title '+i;});
+  view.search={value:''};view.status={setText(){}};view.contentEl.querySelector=()=>null;
+  const titles=[],ctx={setTransform(){},clearRect(){},beginPath(){},arc(){},moveTo(){},lineTo(){},closePath(){},setLineDash(){},fill(){},stroke(){},
+    measureText:text=>({width:text.length*8}),fillText(text,x,y){titles.push({text,x,y,width:text.length*8,height:parseFloat(this.font)*1.2});}};
+  view.canvas.getContext=()=>ctx;
+  const oldWindow=globalThis.window,oldStyle=globalThis.getComputedStyle;
+  globalThis.window={devicePixelRatio:1};globalThis.getComputedStyle=()=>({getPropertyValue:()=>''});
+  const render=()=>{titles.length=0;BrainOSGraphView.prototype.draw.call(view);return structuredClone(titles).sort((a,b)=>a.text.localeCompare(b.text));};
+  try{
+    view.selected=view.nodes[0].path;
+    const before=render();assert.ok(before.length>0);
+    for(const a of before)for(const b of before)if(a!==b){
+      const overlap=a.x-a.width/2<b.x+b.width/2&&a.x+a.width/2>b.x-b.width/2&&a.y<b.y+b.height&&a.y+a.height>b.y;
+      assert.equal(overlap,false);
+    }
+    view.previewThought('Thoughts/sub/B.md');assert.deepEqual(render(),before);
+    view.previewThought();assert.deepEqual(render(),before);
+  }finally{globalThis.window=oldWindow;globalThis.getComputedStyle=oldStyle;}
+});
+
+test('node click requests reading, while a blank click, Escape and file changes restore freedom',async()=>{
+  const f=await readingFixture();f.view.setReadingMode(false);
+  const b=f.view.nodes.find(node=>node.label==='B'),p=f.view.worldToScreen(b);
+  f.view.onPointerDown(pointerAt(p.x,p.y));assert.equal(f.view.readingRequested,false);
+  f.view.onPointerUp(pointerAt(p.x,p.y));assert.equal(f.view.readingRequested,true);
+  f.view.onPointerDown(pointerAt(10,10));f.view.onPointerUp(pointerAt(10,10));assert.equal(f.view.readingRequested,false);
+  f.view.setReadingMode(true);f.view.onKeyDown({key:'Escape',preventDefault(){}});assert.equal(f.view.readingRequested,false);
+  f.view.setReadingMode(true);await f.view.onLoadFile(f.app.vault.getAbstractFileByPath('Thoughts/sub/B.md'));
+  assert.equal(f.view.readingRequested,false);
 });

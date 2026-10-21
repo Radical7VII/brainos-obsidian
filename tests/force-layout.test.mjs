@@ -115,3 +115,24 @@ test('reset discards old particles and invalid saved coordinates never leak into
   assert.deepEqual(layout.snapshot(), {});
   assert.equal(layout.isRunning, false);
 });
+
+test('local drag moves neighbours, freezes distant areas, and settles after release',()=>{
+  const nodes=[node('a',0,0),node('b',250,0),node('c',500,0),node('d',750,0),node('far',4000,800)];
+  const edges=[edge('a','b'),edge('b','c'),edge('c','d')],saved=Object.fromEntries(nodes.map(n=>[n.path,{x:n.x,y:n.y}]));
+  const layout=new ForceLayout();layout.sync(nodes,edges,saved,true);assert.equal(layout.isRunning,false);
+  layout.pin('a',{x:0,y:0});layout.movePinned('a',{x:200,y:200});run(layout,nodes,35);
+  assert.deepEqual({x:nodes[0].x,y:nodes[0].y},{x:200,y:200});
+  assert.notDeepEqual({x:nodes[1].x,y:nodes[1].y},saved.b);assert.deepEqual({x:nodes[3].x,y:nodes[3].y},saved.d);
+  assert.deepEqual({x:nodes[4].x,y:nodes[4].y},saved.far);
+  layout.unpin('a');const released=layout.snapshot();run(layout,nodes,30);
+  assert.notDeepEqual(layout.snapshot().a,released.a);assert.notDeepEqual(layout.snapshot().b,released.b);
+  run(layout,nodes,500);assert.equal(layout.isRunning,false);assert.deepEqual(layout.snapshot().far,saved.far);
+});
+test('local long-distance drags stay finite and bound nearby displacement',()=>{
+  const nodes=[node('a',0,0),node('b',250,0),node('far',4000,900)],layout=new ForceLayout();
+  const saved=Object.fromEntries(nodes.map(n=>[n.path,{x:n.x,y:n.y}]));
+  layout.sync(nodes,[edge('a','b')],saved,true);layout.pin('a',{x:0,y:0});layout.movePinned('a',{x:100000,y:-100000});
+  const before={x:nodes[1].x,y:nodes[1].y};layout.tick(nodes);
+  assert.ok(distance(nodes[1],before)<=8.001);assert.deepEqual(layout.snapshot().far,saved.far);
+  layout.unpin('a');run(layout,nodes);assert.ok(nodes.every(n=>Number.isFinite(n.x)&&Number.isFinite(n.y)));
+});

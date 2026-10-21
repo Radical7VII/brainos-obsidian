@@ -30,7 +30,7 @@ scope.onmessage = event => {
     case "sync":
       revision = message.revision;
       nodes = message.nodes;
-      layout.sync(nodes, message.edges as GraphEdge[], message.saved as Record<string, Point>);
+      layout.sync(nodes, message.edges as GraphEdge[], message.saved as Record<string, Point>, !!message.local);
       break;
     case "configure": layout.configure(message.options as Partial<ForceOptions>); break;
     case "selected": layout.setSelected(message.path); break;

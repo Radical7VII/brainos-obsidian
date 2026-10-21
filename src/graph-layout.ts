@@ -16,6 +16,7 @@ export class GraphLayout {
   private options: Partial<ForceOptions> = {};
   private pinned = new Map<string, Point>();
   private disposed = false;
+  private local = false;
 
   constructor(private readonly invalidate: () => void) {
     try {
@@ -39,13 +40,14 @@ export class GraphLayout {
   private useFallback() {
     this.worker?.terminate(); this.worker = undefined;
     this.fallback = new ForceLayout(); this.fallback.configure(this.options);
-    this.fallback.sync(this.nodes, this.edges, this.positions); this.fallback.setSelected(this.selected);
+    this.fallback.sync(this.nodes, this.edges, this.positions, this.local); this.fallback.setSelected(this.selected);
     for (const [path, point] of this.pinned) this.fallback.pin(path, point);
   }
   private send(message: object) {
     if (!this.disposed && this.worker) this.worker.postMessage({ ...message, commandVersion: ++this.commandVersion });
   }
-  sync(nodes: readonly GraphNode[], edges: readonly GraphEdge[], saved: Record<string, Point>) {
+  sync(nodes: readonly GraphNode[], edges: readonly GraphEdge[], saved: Record<string, Point>, local = false) {
+    this.local = local;
     this.nodes = [...nodes]; this.edges = [...edges]; this.revision++;
     const current: Record<string, Point> = {};
     for (const node of nodes) {
@@ -53,8 +55,8 @@ export class GraphLayout {
       if (point) { node.x = point.x; node.y = point.y; current[node.path] = { ...point }; }
     }
     this.positions = current;
-    if (this.fallback) this.fallback.sync(nodes, edges, this.positions);
-    else { this.running = nodes.length > 0; this.send({ type: "sync", revision: this.revision, nodes, edges, saved: this.positions }); }
+    if (this.fallback) this.fallback.sync(nodes, edges, this.positions, local);
+    else { this.running = nodes.length > 0; this.send({ type: "sync", revision: this.revision, nodes, edges, saved: this.positions, local }); }
   }
   configure(options: Partial<ForceOptions>) { this.options = { ...this.options, ...options }; this.fallback?.configure(options); this.send({ type: "configure", options }); }
   setSelected(path: string | undefined) { this.selected = path; this.fallback?.setSelected(path); this.send({ type: "selected", path }); }
