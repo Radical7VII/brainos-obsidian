@@ -307,7 +307,7 @@ export async function buildThoughtSnapshot(app: App, thoughtFile?: TFile, folder
       steps.push({ key, title: visit.title, body: visit.body, thoughtPath: file.path, pathIndex: visit.path, ordinal: visit.ordinal });
       for (const link of documentLinks(visit.body)) addEdge(file.path, key, await resolve(file.path, link.target, link.label));
     }
-    if (!document.doc.nodes.length) nodes.set("thought:" + file.path, {
+    if (!thoughtFile && !document.doc.nodes.length) nodes.set("thought:" + file.path, {
       path: "thought:" + file.path, label: file.basename, openPath: file.path, ownerPath: file.path, x: 0, y: 0,
       degree: 0, thoughts: [file.path], placeholder: true,
     });

@@ -69,6 +69,19 @@ test('new thoughts are empty Markdown at the exact configured folder or vault ro
   assert.equal(f.content.get(custom.path),'');
   await assert.rejects(()=>createThought(f.app,'无效','../外部'),/笔记库内/);
 });
+test('a new thought opens with no placeholder and returns to a blank canvas after deleting its last node',async()=>{
+  const f=fixture(),file=await createThought(f.app,'未命名思考','');
+  const assertBlank=async()=>{
+    const snapshot=await buildThoughtSnapshot(f.app,file);
+    assert.deepEqual(snapshot.nodes,[]);assert.deepEqual(snapshot.edges,[]);assert.deepEqual(snapshot.steps,[]);
+    assert.deepEqual(snapshot.thoughts,[{path:file.path,title:'未命名思考'}]);
+  };
+  await assertBlank();
+  const key=await createThoughtNode(f.app,file.path,'第一个想法');
+  const snapshot=await buildThoughtSnapshot(f.app,file);
+  assert.equal(snapshot.nodes.length,1);assert.equal(snapshot.nodes[0].label,'第一个想法');
+  await removeThoughtNode(f.app,file.path,key);await assertBlank();
+});
 test('same-name creation reuses one node while preserving every visit and body',async()=>{
   const f=fixture(),file=await createThought(f.app,'思考','记录');
   const a=await createThoughtNode(f.app,file.path,'A','第一次');
