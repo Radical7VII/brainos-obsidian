@@ -1,0 +1,51 @@
+name: Build and publish plugin
+
+on:
+  push:
+    tags:
+      - '[0-9]*'
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - name: Validate release version
+        env:
+          RELEASE_VERSION: ${{ github.ref_name }}
+        run: |
+          node --input-type=module <<'JS'
+          import fs from 'node:fs';
+          const manifest = JSON.parse(fs.readFileSync('manifest.json', 'utf8'));
+          const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+          const versions = JSON.parse(fs.readFileSync('versions.json', 'utf8'));
+          if (manifest.version !== process.env.RELEASE_VERSION || pkg.version !== manifest.version || versions[manifest.version] !== manifest.minAppVersion) throw new Error('Release versions must match');
+          JS
+      - run: npm test
+      - run: npm run build
+      - name: Verify reproducible artifact
+        run: git diff --exit-code -- main.js
+      - name: Attest release assets
+        uses: actions/attest-build-provenance@96b4a1ef7235a096b17240c259729fdd70c83d45 # v2
+        with:
+          subject-path: |
+            main.js
+            styles.css
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ github.ref_name }}
+        run: |
+          gh release create "$RELEASE_VERSION" main.js manifest.json styles.css --verify-tag --title "BrainOS Graph $RELEASE_VERSION" --notes "修复社区自动检查问题。更新说明见仓库 CHANGELOG.md；项目和第三方许可已包含在 main.js 中。"

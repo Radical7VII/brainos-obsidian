@@ -4,6 +4,24 @@ Record thought paths in plain Markdown and explore them as an editable graph.
 
 一份普通 MD 文件对应一次思考。用列表记录一段段思考路径：同名条目复用同一个节点，但每次经过时补充的正文分别保留。图谱由文件重建，节点内容和连接不依赖另一份 JSON 数据。
 
+## Installation
+
+Requires Obsidian 1.7.2 or later.
+
+1. Download `main.js`, `manifest.json`, and `styles.css` from [the latest release](https://github.com/Radical7VII/brainos-obsidian/releases/latest).
+2. Create `.obsidian/plugins/brainos-graph/` inside your vault and place the three files there.
+3. Reload Obsidian and enable **BrainOS Graph** in Settings → Community plugins.
+
+The community directory listing is subject to Obsidian review. Manual installation is available in the meantime.
+
+## Basic usage
+
+Set a thought folder in the plugin settings to limit which Markdown files appear in the shared graph. Run **New thought / 新建思考** from the command palette or the new-tab page. Each thought is an ordinary Markdown file: top-level list items become nodes, consecutive items form directed edges, and a horizontal rule starts a separate path. Repeated titles reuse a node within that file.
+
+Double-click empty canvas space to create a node. Select a node and press Space to edit its title, Tab to extend its path, or Command/Ctrl+Enter to insert a parent. Drag nodes to move them, drag empty space to select several, and use Backspace/Delete to remove the selection. Hover over an edge to highlight it and click to disconnect it. Command/Ctrl+Z undoes graph edits. Edit node body text in the Markdown view.
+
+All note processing stays local. No account, telemetry, or network service is required.
+
 ## 文件格式
 
 ```md

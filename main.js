@@ -1,3 +1,206 @@
+/*! BrainOS Graph — Copyright 2026 BrainOS and contributors
+Apache License
+                           Version 2.0, January 2004
+                        http://www.apache.org/licenses/
+
+   TERMS AND CONDITIONS FOR USE, REPRODUCTION, AND DISTRIBUTION
+
+   1. Definitions.
+
+      "License" shall mean the terms and conditions for use, reproduction,
+      and distribution as defined by Sections 1 through 9 of this document.
+
+      "Licensor" shall mean the copyright owner or entity authorized by
+      the copyright owner that is granting the License.
+
+      "Legal Entity" shall mean the union of the acting entity and all
+      other entities that control, are controlled by, or are under common
+      control with that entity. For the purposes of this definition,
+      "control" means (i) the power, direct or indirect, to cause the
+      direction or management of such entity, whether by contract or
+      otherwise, or (ii) ownership of fifty percent (50%) or more of the
+      outstanding shares, or (iii) beneficial ownership of such entity.
+
+      "You" (or "Your") shall mean an individual or Legal Entity
+      exercising permissions granted by this License.
+
+      "Source" form shall mean the preferred form for making modifications,
+      including but not limited to software source code, documentation
+      source, and configuration files.
+
+      "Object" form shall mean any form resulting from mechanical
+      transformation or translation of a Source form, including but
+      not limited to compiled object code, generated documentation,
+      and conversions to other media types.
+
+      "Work" shall mean the work of authorship, whether in Source or
+      Object form, made available under the License, as indicated by a
+      copyright notice that is included in or attached to the work
+      (an example is provided in the Appendix below).
+
+      "Derivative Works" shall mean any work, whether in Source or Object
+      form, that is based on (or derived from) the Work and for which the
+      editorial revisions, annotations, elaborations, or other modifications
+      represent, as a whole, an original work of authorship. For the purposes
+      of this License, Derivative Works shall not include works that remain
+      separable from, or merely link (or bind by name) to the interfaces of,
+      the Work and Derivative Works thereof.
+
+      "Contribution" shall mean any work of authorship, including
+      the original version of the Work and any modifications or additions
+      to that Work or Derivative Works thereof, that is intentionally
+      submitted to Licensor for inclusion in the Work by the copyright owner
+      or by an individual or Legal Entity authorized to submit on behalf of
+      the copyright owner. For the purposes of this definition, "submitted"
+      means any form of electronic, verbal, or written communication sent
+      to the Licensor or its representatives, including but not limited to
+      communication on electronic mailing lists, source code control systems,
+      and issue tracking systems that are managed by, or on behalf of, the
+      Licensor for the purpose of discussing and improving the Work, but
+      excluding communication that is conspicuously marked or otherwise
+      designated in writing by the copyright owner as "Not a Contribution."
+
+      "Contributor" shall mean Licensor and any individual or Legal Entity
+      on behalf of whom a Contribution has been received by Licensor and
+      subsequently incorporated within the Work.
+
+   2. Grant of Copyright License. Subject to the terms and conditions of
+      this License, each Contributor hereby grants to You a perpetual,
+      worldwide, non-exclusive, no-charge, royalty-free, irrevocable
+      copyright license to reproduce, prepare Derivative Works of,
+      publicly display, publicly perform, sublicense, and distribute the
+      Work and such Derivative Works in Source or Object form.
+
+   3. Grant of Patent License. Subject to the terms and conditions of
+      this License, each Contributor hereby grants to You a perpetual,
+      worldwide, non-exclusive, no-charge, royalty-free, irrevocable
+      (except as stated in this section) patent license to make, have made,
+      use, offer to sell, sell, import, and otherwise transfer the Work,
+      where such license applies only to those patent claims licensable
+      by such Contributor that are necessarily infringed by their
+      Contribution(s) alone or by combination of their Contribution(s)
+      with the Work to which such Contribution(s) was submitted. If You
+      institute patent litigation against any entity (including a
+      cross-claim or counterclaim in a lawsuit) alleging that the Work
+      or a Contribution incorporated within the Work constitutes direct
+      or contributory patent infringement, then any patent licenses
+      granted to You under this License for that Work shall terminate
+      as of the date such litigation is filed.
+
+   4. Redistribution. You may reproduce and distribute copies of the
+      Work or Derivative Works thereof in any medium, with or without
+      modifications, and in Source or Object form, provided that You
+      meet the following conditions:
+
+      (a) You must give any other recipients of the Work or
+          Derivative Works a copy of this License; and
+
+      (b) You must cause any modified files to carry prominent notices
+          stating that You changed the files; and
+
+      (c) You must retain, in the Source form of any Derivative Works
+          that You distribute, all copyright, patent, trademark, and
+          attribution notices from the Source form of the Work,
+          excluding those notices that do not pertain to any part of
+          the Derivative Works; and
+
+      (d) If the Work includes a "NOTICE" text file as part of its
+          distribution, then any Derivative Works that You distribute must
+          include a readable copy of the attribution notices contained
+          within such NOTICE file, excluding those notices that do not
+          pertain to any part of the Derivative Works, in at least one
+          of the following places: within a NOTICE text file distributed
+          as part of the Derivative Works; within the Source form or
+          documentation, if provided along with the Derivative Works; or,
+          within a display generated by the Derivative Works, if and
+          wherever such third-party notices normally appear. The contents
+          of the NOTICE file are for informational purposes only and
+          do not modify the License. You may add Your own attribution
+          notices within Derivative Works that You distribute, alongside
+          or as an addendum to the NOTICE text from the Work, provided
+          that such additional attribution notices cannot be construed
+          as modifying the License.
+
+      You may add Your own copyright statement to Your modifications and
+      may provide additional or different license terms and conditions
+      for use, reproduction, or distribution of Your modifications, or
+      for any such Derivative Works as a whole, provided Your use,
+      reproduction, and distribution of the Work otherwise complies with
+      the conditions stated in this License.
+
+   5. Submission of Contributions. Unless You explicitly state otherwise,
+      any Contribution intentionally submitted for inclusion in the Work
+      by You to the Licensor shall be under the terms and conditions of
+      this License, without any additional terms or conditions.
+      Notwithstanding the above, nothing herein shall supersede or modify
+      the terms of any separate license agreement you may have executed
+      with Licensor regarding such Contributions.
+
+   6. Trademarks. This License does not grant permission to use the trade
+      names, trademarks, service marks, or product names of the Licensor,
+      except as required for reasonable and customary use in describing the
+      origin of the Work and reproducing the content of the NOTICE file.
+
+   7. Disclaimer of Warranty. Unless required by applicable law or
+      agreed to in writing, Licensor provides the Work (and each
+      Contributor provides its Contributions) on an "AS IS" BASIS,
+      WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+      implied, including, without limitation, any warranties or conditions
+      of TITLE, NON-INFRINGEMENT, MERCHANTABILITY, or FITNESS FOR A
+      PARTICULAR PURPOSE. You are solely responsible for determining the
+      appropriateness of using or redistributing the Work and assume any
+      risks associated with Your exercise of permissions under this License.
+
+   8. Limitation of Liability. In no event and under no legal theory,
+      whether in tort (including negligence), contract, or otherwise,
+      unless required by applicable law (such as deliberate and grossly
+      negligent acts) or agreed to in writing, shall any Contributor be
+      liable to You for damages, including any direct, indirect, special,
+      incidental, or consequential damages of any character arising as a
+      result of this License or out of the use or inability to use the
+      Work (including but not limited to damages for loss of goodwill,
+      work stoppage, computer failure or malfunction, or any and all
+      other commercial damages or losses), even if such Contributor
+      has been advised of the possibility of such damages.
+
+   9. Accepting Warranty or Additional Liability. While redistributing
+      the Work or Derivative Works thereof, You may choose to offer,
+      and charge a fee for, acceptance of support, warranty, indemnity,
+      or other liability obligations and/or rights consistent with this
+      License. However, in accepting such obligations, You may act only
+      on Your own behalf and on Your sole responsibility, not on behalf
+      of any other Contributor, and only if You agree to indemnify,
+      defend, and hold each Contributor harmless for any liability
+      incurred by, or claims asserted against, such Contributor by reason
+      of your accepting any such warranty or additional liability.
+
+   END OF TERMS AND CONDITIONS
+
+   APPENDIX: How to apply the Apache License to your work.
+
+      To apply the Apache License to your work, attach the following
+      boilerplate notice, with the fields enclosed by brackets "[]"
+      replaced with your own identifying information. (Don't include
+      the brackets!)  The text should be enclosed in the appropriate
+      comment syntax for the file format. We also recommend that a
+      file or class name and description of purpose be included on the
+      same "printed page" as the copyright notice for easier
+      identification within third-party archives.
+
+   Copyright [yyyy] [name of copyright owner]
+
+   Licensed under the Apache License, Version 2.0 (the "License");
+   you may not use this file except in compliance with the License.
+   You may obtain a copy of the License at
+
+       http://www.apache.org/licenses/LICENSE-2.0
+
+   Unless required by applicable law or agreed to in writing, software
+   distributed under the License is distributed on an "AS IS" BASIS,
+   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+   See the License for the specific language governing permissions and
+   limitations under the License.
+*/
 /*! esbuild generated runtime helpers
 MIT License
 
@@ -953,7 +1156,7 @@ async function createThought(app, title, folder) {
   return fileManager.createNewMarkdownFile(parent, title.trim() || "\u672A\u547D\u540D\u601D\u8003", "");
 }
 
-// layout-worker:/Users/othnielsu/Documents/repo/brainos-obsidian/src/layout-worker.ts
+// layout-worker:src/layout-worker.ts
 var layout_worker_default = '"use strict";\n(() => {\n  var __defProp = Object.defineProperty;\n  var __defNormalProp = (obj, key, value) => key in obj ? __defProp(obj, key, { enumerable: true, configurable: true, writable: true, value }) : obj[key] = value;\n  var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "symbol" ? key + "" : key, value);\n\n  // src/force-layout.ts\n  var DEFAULT_FORCE_OPTIONS = Object.freeze({\n    centerStrength: 0.1,\n    repelStrength: 1e3,\n    linkStrength: 1,\n    linkDistance: 250\n  });\n  var _ForceLayout = class _ForceLayout {\n    constructor(options = {}) {\n      __publicField(this, "particles", []);\n      __publicField(this, "byId", /* @__PURE__ */ new Map());\n      __publicField(this, "links", []);\n      __publicField(this, "topology", "");\n      __publicField(this, "alpha", 0);\n      __publicField(this, "alphaTarget", 0);\n      __publicField(this, "options", { ...DEFAULT_FORCE_OPTIONS });\n      __publicField(this, "local", false);\n      __publicField(this, "active", /* @__PURE__ */ new Set());\n      __publicField(this, "rests", /* @__PURE__ */ new Map());\n      this.configure(options);\n    }\n    configure(options) {\n      const next = { ...this.options };\n      for (const key of Object.keys(next)) {\n        const value = options[key];\n        if (value !== void 0 && Number.isFinite(value)) {\n          next[key] = key === "linkDistance" ? clamp(value, 1, 1e4) : clamp(value, 0, key === "repelStrength" ? 1e6 : 10);\n        }\n      }\n      const changed = Object.keys(next).some((key) => next[key] !== this.options[key]);\n      this.options = next;\n      if (changed) {\n        if (this.local) this.activateLocal(this.particles.map((node) => node.id));\n        this.reheat(0.3);\n      }\n    }\n    reset() {\n      this.particles = [];\n      this.byId.clear();\n      this.links = [];\n      this.topology = "";\n      this.alpha = 0;\n      this.alphaTarget = 0;\n      this.active.clear();\n      this.rests.clear();\n    }\n    sync(nodes2, edges, saved, local = false) {\n      var _a;\n      const wasLocal = this.local;\n      this.local = local;\n      const oldIds = new Set(this.byId.keys());\n      const oldLinks = new Map(this.links.map((link) => [JSON.stringify([link.source.id, link.target.id]), [link.source.id, link.target.id]]));\n      const ids = [...new Set(nodes2.map((node) => node.path))].sort();\n      const idSet = new Set(ids);\n      const uniqueEdges = /* @__PURE__ */ new Map();\n      for (const edge of edges) {\n        if (edge.from !== edge.to && idSet.has(edge.from) && idSet.has(edge.to)) uniqueEdges.set(JSON.stringify([edge.from, edge.to]), edge);\n      }\n      const sortedEdges = [...uniqueEdges.entries()].sort(([a], [b]) => a.localeCompare(b));\n      const topology = JSON.stringify([ids, sortedEdges.map(([key]) => key)]);\n      const changed = topology !== this.topology;\n      const firstGraph = this.particles.length === 0;\n      this.topology = topology;\n      for (const id of this.byId.keys()) if (!idSet.has(id)) {\n        this.byId.delete(id);\n        this.active.delete(id);\n        this.rests.delete(id);\n      }\n      const nodeById = new Map(nodes2.map((node) => [node.path, node]));\n      const adjacency = /* @__PURE__ */ new Map();\n      for (const [, edge] of sortedEdges) {\n        if (!adjacency.has(edge.from)) adjacency.set(edge.from, []);\n        if (!adjacency.has(edge.to)) adjacency.set(edge.to, []);\n        adjacency.get(edge.from).push(edge.to);\n        adjacency.get(edge.to).push(edge.from);\n      }\n      const added = [];\n      for (const [index, id] of ids.entries()) {\n        if (this.byId.has(id)) continue;\n        const stored = saved[id];\n        const original = nodeById.get(id);\n        const explicit = validPoint(stored) ? stored : validPoint(original) && (original.x !== 0 || original.y !== 0) ? original : void 0;\n        const point = explicit != null ? explicit : seedPoint(id, index, ids.length);\n        this.byId.set(id, { id, index, x: point.x, y: point.y, vx: 0, vy: 0, degree: 0 });\n        if (!explicit) added.push(id);\n      }\n      const newSet = new Set(added);\n      for (const id of added) {\n        const neighbors = ((_a = adjacency.get(id)) != null ? _a : []).filter((other) => !newSet.has(other)).map((other) => this.byId.get(other));\n        if (!neighbors.length) continue;\n        const angle = hash(id) / 4294967296 * Math.PI * 2;\n        const point = this.byId.get(id);\n        const radius = 40 + hash(id + "radius") % 40;\n        point.x = neighbors.reduce((sum, node) => sum + node.x, 0) / neighbors.length + Math.cos(angle) * radius;\n        point.y = neighbors.reduce((sum, node) => sum + node.y, 0) / neighbors.length + Math.sin(angle) * radius;\n      }\n      this.particles = ids.map((id, index) => {\n        const particle = this.byId.get(id);\n        particle.index = index;\n        particle.degree = 0;\n        return particle;\n      });\n      for (const [, edge] of sortedEdges) {\n        this.byId.get(edge.from).degree++;\n        this.byId.get(edge.to).degree++;\n      }\n      this.links = sortedEdges.map(([, edge]) => {\n        const source = this.byId.get(edge.from), target = this.byId.get(edge.to);\n        return { source, target, bias: source.degree / (source.degree + target.degree), strength: 1 / Math.min(source.degree, target.degree) };\n      });\n      for (const particle of this.particles) if (!this.rests.has(particle.id)) this.rests.set(particle.id, { x: particle.x, y: particle.y });\n      this.alphaTarget = this.particles.some((particle) => particle.fixed) ? 0.3 : 0;\n      if (!this.particles.length) this.alpha = 0;\n      else if (local) {\n        if (firstGraph || !wasLocal) {\n          this.alpha = 0;\n          this.active.clear();\n          this.activateLocal(added);\n        } else if (changed) {\n          const affected = new Set(ids.filter((id) => !oldIds.has(id)));\n          for (const [key, edge] of sortedEdges) if (!oldLinks.has(key)) {\n            affected.add(edge.from);\n            affected.add(edge.to);\n          }\n          for (const [key, endpoints] of oldLinks) if (!uniqueEdges.has(key)) {\n            for (const id of endpoints) if (idSet.has(id)) affected.add(id);\n          }\n          this.activateLocal([...affected]);\n        }\n        if (this.active.size && changed) this.reheat(0.3);\n      } else if (changed || wasLocal) this.reheat(firstGraph ? 1 : 0.3);\n      this.copyToNodes(nodes2);\n    }\n    /** Selection affects rendering only; it must not attract the whole graph. */\n    setSelected(_path) {\n    }\n    activateLocal(ids) {\n      var _a;\n      if (!this.local || !ids.length) return;\n      if (ids.length >= this.particles.length) {\n        for (const node of this.particles) this.active.add(node.id);\n        return;\n      }\n      const region = new Set(ids.filter((id) => this.byId.has(id)));\n      const adjacency = /* @__PURE__ */ new Map();\n      for (const link of this.links) {\n        if (!adjacency.has(link.source.id)) adjacency.set(link.source.id, /* @__PURE__ */ new Set());\n        if (!adjacency.has(link.target.id)) adjacency.set(link.target.id, /* @__PURE__ */ new Set());\n        adjacency.get(link.source.id).add(link.target.id);\n        adjacency.get(link.target.id).add(link.source.id);\n      }\n      let frontier = [...region];\n      for (let depth = 0; depth < 2; depth++) {\n        const next = [];\n        for (const id of frontier) for (const other of (_a = adjacency.get(id)) != null ? _a : []) if (!region.has(other)) {\n          region.add(other);\n          next.push(other);\n        }\n        frontier = next;\n      }\n      const centers = ids.flatMap((id) => {\n        var _a2;\n        return (_a2 = this.byId.get(id)) != null ? _a2 : [];\n      }), radius = Math.max(180, this.options.linkDistance * 1.5);\n      for (const node of this.particles) if (centers.some((center) => Math.hypot(node.x - center.x, node.y - center.y) < radius)) region.add(node.id);\n      for (const id of region) this.active.add(id);\n    }\n    pin(path, position) {\n      const particle = this.byId.get(path);\n      if (!particle || !validPoint(position)) return;\n      this.activateLocal([path]);\n      particle.fixed = { ...position };\n      particle.x = position.x;\n      particle.y = position.y;\n      particle.vx = 0;\n      particle.vy = 0;\n      this.alphaTarget = 0.3;\n      this.reheat(0.3);\n    }\n    movePinned(path, position) {\n      const particle = this.byId.get(path);\n      if (!(particle == null ? void 0 : particle.fixed) || !validPoint(position)) return;\n      particle.fixed = { ...position };\n      particle.x = position.x;\n      particle.y = position.y;\n      particle.vx = 0;\n      particle.vy = 0;\n      this.alphaTarget = 0.3;\n      this.reheat(0.3);\n      this.activateLocal([path]);\n    }\n    unpin(path) {\n      const particle = this.byId.get(path);\n      if (!(particle == null ? void 0 : particle.fixed)) return;\n      this.rests.set(path, { ...particle.fixed });\n      particle.fixed = void 0;\n      particle.vx = 0;\n      particle.vy = 0;\n      this.alphaTarget = this.particles.some((node) => node.fixed) ? 0.3 : 0;\n      this.reheat(0.3);\n    }\n    reheat(alpha = 0.3) {\n      this.alpha = Math.max(this.alpha, clamp(finite(alpha, 0.3), 0, 1));\n    }\n    tick(nodes2) {\n      if (!this.isRunning) {\n        this.copyToNodes(nodes2);\n        return false;\n      }\n      this.alpha += (this.alphaTarget - this.alpha) * _ForceLayout.alphaDecay;\n      const center = this.options.centerStrength * this.alpha * (this.local ? 0.05 : 1);\n      for (const particle of this.particles) {\n        const rest = this.local ? this.rests.get(particle.id) : { x: 0, y: 0 };\n        particle.vx -= (particle.x - rest.x) * center;\n        particle.vy -= (particle.y - rest.y) * center;\n      }\n      for (const link of this.links) {\n        const a = link.source, b = link.target;\n        let dx = b.x + b.vx - a.x - a.vx, dy = b.y + b.vy - a.y - a.vy;\n        if (dx === 0 && dy === 0) {\n          const unit = direction(a.id, b.id);\n          dx = unit.x * 0.1;\n          dy = unit.y * 0.1;\n        }\n        const length = Math.hypot(dx, dy);\n        const factor = (length - this.options.linkDistance) / length * this.alpha * this.options.linkStrength * link.strength;\n        dx *= factor;\n        dy *= factor;\n        if (this.local) {\n          const scale = Math.min(0.35, 16 * this.alpha / Math.max(1e-3, Math.hypot(dx, dy)));\n          dx *= scale;\n          dy *= scale;\n        }\n        b.vx -= dx * link.bias;\n        b.vy -= dy * link.bias;\n        a.vx += dx * (1 - link.bias);\n        a.vy += dy * (1 - link.bias);\n      }\n      if (this.particles.length > 1 && this.options.repelStrength > 0) {\n        const tree = buildTree(this.particles);\n        const strength = this.options.repelStrength * this.alpha;\n        for (const particle of this.particles) this.repulse(particle, tree, strength);\n      }\n      this.collide();\n      for (const particle of this.particles) {\n        if (particle.fixed) {\n          particle.x = particle.fixed.x;\n          particle.y = particle.fixed.y;\n          particle.vx = 0;\n          particle.vy = 0;\n        } else if (this.local && !this.active.has(particle.id)) {\n          particle.vx = 0;\n          particle.vy = 0;\n        } else {\n          particle.vx *= _ForceLayout.damping;\n          particle.vy *= _ForceLayout.damping;\n          if (this.local) {\n            const scale = Math.min(1, 8 / Math.max(1e-3, Math.hypot(particle.vx, particle.vy)));\n            particle.vx *= scale;\n            particle.vy *= scale;\n          }\n          particle.x += particle.vx;\n          particle.y += particle.vy;\n          if (!Number.isFinite(particle.x) || !Number.isFinite(particle.y) || Math.abs(particle.x) > 1e7 || Math.abs(particle.y) > 1e7) {\n            const seed = seedPoint(particle.id, particle.index, this.particles.length);\n            particle.x = seed.x;\n            particle.y = seed.y;\n            particle.vx = 0;\n            particle.vy = 0;\n          }\n        }\n      }\n      if (this.alphaTarget === 0 && this.alpha < _ForceLayout.alphaMin) {\n        this.alpha = 0;\n        this.active.clear();\n      }\n      this.copyToNodes(nodes2);\n      return this.isRunning;\n    }\n    snapshot() {\n      return Object.fromEntries(this.particles.map((particle) => [particle.id, { x: particle.x, y: particle.y }]));\n    }\n    get isRunning() {\n      return this.particles.length > 0 && (this.alpha >= _ForceLayout.alphaMin || this.alphaTarget > 0);\n    }\n    copyToNodes(nodes2) {\n      for (const node of nodes2) {\n        const point = this.byId.get(node.path);\n        if (point) {\n          node.x = point.x;\n          node.y = point.y;\n        }\n      }\n    }\n    repulse(particle, quad, strength) {\n      var _a;\n      if (!quad.count) return;\n      let dx = particle.x - quad.cx, dy = particle.y - quad.cy;\n      let squared = dx * dx + dy * dy;\n      const contains = particle.x >= quad.x && particle.x <= quad.x + quad.width && particle.y >= quad.y && particle.y <= quad.y + quad.width;\n      if (quad.children && !contains && quad.width * quad.width < _ForceLayout.thetaSquared * squared) {\n        const factor = strength * quad.count / Math.max(1, squared);\n        particle.vx += dx * factor;\n        particle.vy += dy * factor;\n      } else if (quad.children) {\n        for (const child of quad.children) this.repulse(particle, child, strength);\n      } else {\n        for (const other of (_a = quad.points) != null ? _a : []) {\n          if (other === particle) continue;\n          dx = particle.x - other.x;\n          dy = particle.y - other.y;\n          squared = dx * dx + dy * dy;\n          if (squared < 1e-12) {\n            const unit = direction(other.id, particle.id);\n            dx = unit.x;\n            dy = unit.y;\n            squared = 1;\n          }\n          const factor = strength / Math.max(1, squared);\n          particle.vx += dx * factor;\n          particle.vy += dy * factor;\n        }\n      }\n    }\n    /** Predicted-position uniform buckets avoid an all-pairs collision pass. */\n    collide() {\n      var _a, _b;\n      const distance = _ForceLayout.collisionDistance;\n      const buckets = /* @__PURE__ */ new Map();\n      const predicted = this.particles.map((node) => ({ x: node.x + node.vx, y: node.y + node.vy }));\n      for (const particle of this.particles) {\n        const point = predicted[particle.index];\n        const key = `${Math.floor(point.x / distance)},${Math.floor(point.y / distance)}`;\n        const bucket = (_a = buckets.get(key)) != null ? _a : [];\n        bucket.push(particle);\n        buckets.set(key, bucket);\n      }\n      for (const particle of this.particles) {\n        const point = predicted[particle.index], cellX = Math.floor(point.x / distance), cellY = Math.floor(point.y / distance);\n        for (let x = cellX - 1; x <= cellX + 1; x++) for (let y = cellY - 1; y <= cellY + 1; y++) {\n          for (const other of (_b = buckets.get(`${x},${y}`)) != null ? _b : []) {\n            if (other.index <= particle.index) continue;\n            const target = predicted[other.index];\n            let dx = target.x - point.x, dy = target.y - point.y;\n            let length = Math.hypot(dx, dy);\n            if (length >= distance) continue;\n            if (length < 1e-6) {\n              const unit = direction(particle.id, other.id);\n              dx = unit.x;\n              dy = unit.y;\n              length = 1;\n            }\n            const factor = (distance - length) / length * _ForceLayout.collisionStrength;\n            const aShare = particle.fixed ? 0 : other.fixed ? 1 : 0.5;\n            const bShare = other.fixed ? 0 : particle.fixed ? 1 : 0.5;\n            particle.vx -= dx * factor * aShare;\n            particle.vy -= dy * factor * aShare;\n            other.vx += dx * factor * bShare;\n            other.vy += dy * factor * bShare;\n          }\n        }\n      }\n    }\n  };\n  __publicField(_ForceLayout, "alphaDecay", 1 - Math.pow(1e-3, 1 / 300));\n  __publicField(_ForceLayout, "alphaMin", 1e-3);\n  __publicField(_ForceLayout, "damping", 0.6);\n  __publicField(_ForceLayout, "thetaSquared", 0.9 * 0.9);\n  __publicField(_ForceLayout, "collisionDistance", 120);\n  __publicField(_ForceLayout, "collisionStrength", 0.5);\n  var ForceLayout = _ForceLayout;\n  function buildTree(points) {\n    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;\n    for (const point of points) {\n      minX = Math.min(minX, point.x);\n      minY = Math.min(minY, point.y);\n      maxX = Math.max(maxX, point.x);\n      maxY = Math.max(maxY, point.y);\n    }\n    const width = Math.max(1, maxX - minX, maxY - minY) * 1.000001;\n    return splitQuad(points, minX, minY, width, 0);\n  }\n  function splitQuad(points, x, y, width, depth) {\n    let cx = 0, cy = 0;\n    for (const point of points) {\n      cx += point.x;\n      cy += point.y;\n    }\n    const quad = { x, y, width, count: points.length, cx: cx / points.length, cy: cy / points.length };\n    if (points.length <= 4 || depth >= 24 || width < 1e-6) {\n      quad.points = points;\n      return quad;\n    }\n    const half = width / 2, groups = [[], [], [], []];\n    for (const point of points) groups[(point.x >= x + half ? 1 : 0) + (point.y >= y + half ? 2 : 0)].push(point);\n    quad.children = groups.flatMap((group, index) => group.length ? [splitQuad(group, x + index % 2 * half, y + (index >= 2 ? half : 0), half, depth + 1)] : []);\n    return quad;\n  }\n  function finite(value, fallback) {\n    return Number.isFinite(value) ? value : fallback;\n  }\n  function clamp(value, min, max) {\n    return Math.max(min, Math.min(max, value));\n  }\n  function validPoint(point) {\n    return !!point && Number.isFinite(point.x) && Number.isFinite(point.y) && Math.abs(point.x) <= 1e7 && Math.abs(point.y) <= 1e7;\n  }\n  function hash(value) {\n    let result = 2166136261;\n    for (const char of value) {\n      result ^= char.charCodeAt(0);\n      result = Math.imul(result, 16777619);\n    }\n    return result >>> 0;\n  }\n  function seedPoint(id, index, count) {\n    const angle = hash(id) / 4294967296 * Math.PI * 2;\n    const radius = (120 + Math.sqrt(count) * 40) * Math.sqrt((index + 0.5) / Math.max(1, count));\n    return { x: Math.cos(angle) * radius, y: Math.sin(angle) * radius };\n  }\n  function direction(from, to) {\n    const first = from < to ? from : to, second = from < to ? to : from;\n    const angle = hash(first + "\\0" + second) / 4294967296 * Math.PI * 2;\n    const sign = from < to ? 1 : -1;\n    return { x: Math.cos(angle) * sign, y: Math.sin(angle) * sign };\n  }\n\n  // src/layout-worker.ts\n  var layout = new ForceLayout();\n  var nodes = [];\n  var revision = 0;\n  var commandVersion = 0;\n  var timer;\n  var scope = self;\n  function publish() {\n    const positions = new Float32Array(nodes.length * 2);\n    nodes.forEach((node, index) => {\n      positions[index * 2] = node.x;\n      positions[index * 2 + 1] = node.y;\n    });\n    scope.postMessage({ revision, commandVersion, positions, running: layout.isRunning }, [positions.buffer]);\n  }\n  function run() {\n    timer = void 0;\n    layout.tick(nodes);\n    publish();\n    if (layout.isRunning) timer = setTimeout(run, 1e3 / 60);\n  }\n  function start() {\n    if (timer === void 0) timer = setTimeout(run, 0);\n  }\n  scope.onmessage = (event) => {\n    const message = event.data;\n    commandVersion = message.commandVersion;\n    switch (message.type) {\n      case "sync":\n        revision = message.revision;\n        nodes = message.nodes;\n        layout.sync(nodes, message.edges, message.saved, !!message.local);\n        break;\n      case "configure":\n        layout.configure(message.options);\n        break;\n      case "selected":\n        layout.setSelected(message.path);\n        break;\n      case "pin":\n        layout.pin(message.path, message.point);\n        break;\n      case "move":\n        layout.movePinned(message.path, message.point);\n        break;\n      case "unpin":\n        layout.unpin(message.path);\n        break;\n      case "reheat":\n        layout.reheat(message.alpha);\n        break;\n      case "reset":\n        layout.reset();\n        break;\n    }\n    publish();\n    if (layout.isRunning) start();\n  };\n})();\n';
 
 // src/force-layout.ts
@@ -4327,7 +4530,7 @@ var BrainOSSettingTab = class extends import_obsidian8.PluginSettingTab {
   display() {
     this.hide();
     this.containerEl.empty();
-    this.containerEl.createEl("h2", { text: "BrainOS Graph" });
+    new import_obsidian8.Setting(this.containerEl).setName("BrainOS Graph").setHeading();
     new import_obsidian8.Setting(this.containerEl).setName("\u601D\u8003\u76EE\u5F55").setDesc("\u586B\u5199\u7B14\u8BB0\u5E93\u5185\u7684\u6587\u4EF6\u5939\u8DEF\u5F84\uFF0C\u4F8B\u5982 BrainOS/\u601D\u8003\u3002\u65B0\u601D\u8003\u4FDD\u5B58\u5230\u8FD9\u91CC\uFF0C\u8282\u70B9\u68C0\u7D22\u4EC5\u5305\u542B\u6B64\u76EE\u5F55\u53CA\u5B50\u76EE\u5F55\u7684 Markdown\uFF1B\u7559\u7A7A\u4F7F\u7528\u6574\u4E2A\u7B14\u8BB0\u5E93\u3002").addText((text) => {
       const updateFolder = async (value) => {
         const folder = value.trim();

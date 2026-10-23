@@ -4,7 +4,8 @@ import { readFileSync } from "node:fs";
 
 // Preserve the license for esbuild helpers injected into the distributed bundle.
 const esbuildLicense = readFileSync(new URL("./node_modules/esbuild/LICENSE.md", import.meta.url), "utf8").trim();
-const licenseBanner = `/*! esbuild generated runtime helpers\n${esbuildLicense}\n*/`;
+const projectLicense = readFileSync(new URL("./LICENSE", import.meta.url), "utf8").trim();
+const licenseBanner = `/*! BrainOS Graph — Copyright 2026 BrainOS and contributors\n${projectLicense}\n*/\n/*! esbuild generated runtime helpers\n${esbuildLicense}\n*/`;
 
 const watch = process.argv.includes("--watch");
 const context = await esbuild.context({
@@ -21,9 +22,9 @@ const context = await esbuild.context({
   plugins: [{
     name: "inline-layout-worker",
     setup(build) {
-      build.onResolve({ filter: /\?worker$/ }, args => ({ path: path.resolve(args.resolveDir, args.path.slice(0, -7)), namespace: "layout-worker" }));
+      build.onResolve({ filter: /\?worker$/ }, args => ({ path: path.relative(process.cwd(), path.resolve(args.resolveDir, args.path.slice(0, -7))).split(path.sep).join("/"), namespace: "layout-worker" }));
       build.onLoad({ filter: /.*/, namespace: "layout-worker" }, async args => {
-        const result = await esbuild.build({ entryPoints: [args.path], bundle: true, write: false, format: "iife", platform: "browser", target: "es2018", metafile: true });
+        const result = await esbuild.build({ entryPoints: [path.resolve(args.path)], bundle: true, write: false, format: "iife", platform: "browser", target: "es2018", metafile: true });
         return { contents: result.outputFiles[0].text, loader: "text", watchFiles: Object.keys(result.metafile.inputs).map(file => path.resolve(file)) };
       });
     },

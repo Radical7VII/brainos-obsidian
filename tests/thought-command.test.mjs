@@ -19,7 +19,7 @@ const bundled=await build({
       export class Modal{static opened=0;open(){Modal.opened++;}}
       export class PluginSettingTab{constructor(app){this.app=app;}}
       export class Setting{
-        static instances=[];constructor(){Setting.instances.push(this);}setName(name){this.name=name;return this;}setDesc(){return this;}
+        static instances=[];constructor(){Setting.instances.push(this);}setName(name){this.name=name;return this;}setHeading(){return this;}setDesc(){return this;}
         addText(callback){this.text={inputEl:{value:""},setPlaceholder(value){this.placeholder=value;return this;},setValue(value){this.value=value;return this;},onChange(callback){this.change=callback;return this;}};callback(this.text);return this;}
         addButton(callback){const button={setButtonText(){return this;},onClick(){return this;}};callback(button);return this;}
       }
