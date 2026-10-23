@@ -1,4 +1,4 @@
-import { FileView, MarkdownView, Menu, Modal, Notice, Setting, SuggestModal, TFile, WorkspaceLeaf, setIcon } from "obsidian";
+import { FileView, MarkdownView, Menu, Modal, Notice, Setting, SuggestModal, TFile, WorkspaceLeaf, setIcon, requireApiVersion, setTooltip } from "obsidian";
 import type BrainOSPlugin from "./main";
 import { GraphEdge, GraphNode, GraphSnapshot, Point, buildSnapshot } from "./thoughts";
 import { GraphLayout } from "./graph-layout";
@@ -170,7 +170,7 @@ export class BrainOSGraphView extends FileView {
     observer.observe(this.contentEl);
     this.register(() => observer.disconnect());
     // FileView receives its active editing file in setState after onOpen.
-    this.initialRefreshFrame = requestAnimationFrame(() => {
+    this.initialRefreshFrame = this.contentEl.win.requestAnimationFrame(() => {
       this.initialRefreshFrame = undefined;
       if (!this.closed && !this.file) void this.refresh();
     });
@@ -180,17 +180,17 @@ export class BrainOSGraphView extends FileView {
   async onClose() {
     this.closed = true;
     this.refreshRevision++;
-    if (this.initialRefreshFrame !== undefined) cancelAnimationFrame(this.initialRefreshFrame);
+    if (this.initialRefreshFrame !== undefined) this.contentEl.win.cancelAnimationFrame(this.initialRefreshFrame);
     this.initialRefreshFrame = undefined;
-    if (this.animationFrame !== undefined) cancelAnimationFrame(this.animationFrame);
+    if (this.animationFrame !== undefined) this.contentEl.win.cancelAnimationFrame(this.animationFrame);
     this.animationFrame = undefined;
     if (this.layoutSaveTimer !== undefined) window.clearTimeout(this.layoutSaveTimer);
     this.layoutSaveTimer = undefined;
     this.persistLayoutPositions();
     this.persistViewport();
     if (this.searchTimer !== undefined) window.clearTimeout(this.searchTimer);
-    if (this.rendererFrame !== undefined) cancelAnimationFrame(this.rendererFrame);
-    if (this.cameraFrame !== undefined) cancelAnimationFrame(this.cameraFrame);
+    if (this.rendererFrame !== undefined) this.contentEl.win.cancelAnimationFrame(this.rendererFrame);
+    if (this.cameraFrame !== undefined) this.contentEl.win.cancelAnimationFrame(this.cameraFrame);
     this.rendererFrame = undefined; this.cameraFrame = undefined;
     this.forceLayout.dispose();
     this.controls?.remove(); this.controls = undefined;
@@ -364,7 +364,11 @@ export class BrainOSGraphView extends FileView {
     }
     const save = () => { void this.plugin.saveLayout(); };
     const slider = (name: string, value: number, min: number, max: number, step: number, change: (value: number) => void) => {
-      new Setting(panel).setName(name).addSlider(control => control.setLimits(min, max, step).setValue(value).setDynamicTooltip().onChange(value => { change(value); save(); this.draw(); }));
+      new Setting(panel).setName(name).addSlider(control => {
+        control.setLimits(min, max, step).setValue(value);
+        setTooltip(control.sliderEl, String(value));
+        control.onChange(value => { change(value); setTooltip(control.sliderEl, String(value)); save(); this.draw(); });
+      });
     };
     panel.createEl("h3", { text: "显示" });
     slider("节点大小", settings.display.nodeSizeMultiplier, .25, 3, .05, value => { settings.display.nodeSizeMultiplier = value; this.updateReadingLayout(); });
@@ -398,7 +402,7 @@ export class BrainOSGraphView extends FileView {
 
   private startLayoutAnimation() {
     if (this.closed || this.animationFrame !== undefined) return;
-    this.animationFrame = requestAnimationFrame(time => {
+    this.animationFrame = this.contentEl.win.requestAnimationFrame(time => {
       this.animationFrame = undefined;
       if (this.closed) return;
       this.forceLayout.tick(this.nodes);
@@ -704,10 +708,10 @@ export class BrainOSGraphView extends FileView {
       const animate = (time: number) => {
         this.rendererFrame = undefined;
         if (this.closed) return;
-        if (time - this.rendererLastDraw < 32) { this.rendererFrame = requestAnimationFrame(animate); return; }
+        if (time - this.rendererLastDraw < 32) { this.rendererFrame = this.contentEl.win.requestAnimationFrame(animate); return; }
         this.draw();
       };
-      this.rendererFrame = requestAnimationFrame(animate);
+      this.rendererFrame = this.contentEl.win.requestAnimationFrame(animate);
     }
     let empty = this.contentEl.querySelector<HTMLElement>(".brainos-graph-empty");
     if (!this.nodes.length && !empty) empty = this.contentEl.createDiv({ cls: "brainos-graph-empty", text: "双击空白，写下第一个想法" });
@@ -872,11 +876,11 @@ export class BrainOSGraphView extends FileView {
 
   private onWheel(event: WheelEvent) {
     event.preventDefault(); if (this.editor) return;
-    const platform = this.canvas.ownerDocument?.defaultView?.navigator.platform ?? globalThis.navigator?.platform ?? "";
+    const platform = this.canvas.ownerDocument?.defaultView?.navigator.platform ?? this.contentEl.ownerDocument.defaultView?.navigator.platform ?? "";
     if (isMacTrackpadPan(event, platform)) {
       // Wheel deltas are screen pixels; the camera stores its offset in world units.
       // Stop pending zoom so switching from pinch to pan cannot move the anchor.
-      if (this.cameraFrame !== undefined) cancelAnimationFrame(this.cameraFrame);
+      if (this.cameraFrame !== undefined) this.contentEl.win.cancelAnimationFrame(this.cameraFrame);
       this.cameraFrame = undefined;
       this.targetZoom = undefined;
       this.zoomAnchor = undefined;
@@ -897,7 +901,7 @@ export class BrainOSGraphView extends FileView {
 
   private animateZoom() {
     if (this.closed || this.cameraFrame !== undefined) return;
-    this.cameraFrame = requestAnimationFrame(() => {
+    this.cameraFrame = this.contentEl.win.requestAnimationFrame(() => {
       this.cameraFrame = undefined;
       if (this.closed || this.targetZoom === undefined || !this.zoomAnchor) return;
       const before = this.screenToWorld(this.zoomAnchor.x, this.zoomAnchor.y);
@@ -1013,7 +1017,7 @@ export class BrainOSGraphView extends FileView {
     const title = form.createEl("input", { cls: "brainos-node-title-input", placeholder: "输入名称，同名复用已有节点", attr: { "aria-label": "节点标题", autocomplete: "off", required: "" } });
     if (insertion) title.placeholder = "输入要插入的新节点名称";
     let chosen: NodeTitleCandidate | undefined;
-    this.titleSuggest = new NodeTitleSuggest(this.app, title, target!, async () => {
+    this.titleSuggest = new NodeTitleSuggest(this.app, title, target, async () => {
       const snapshot = await buildSnapshot(this.app, undefined, this.plugin.layout.settings.noteFolder).catch(() => ({ ...this.snapshot, nodes: this.snapshot.nodes.filter(node => !!node.ownerPath && isThoughtFile(node.ownerPath, this.plugin.layout.settings.noteFolder)) }));
       return snapshot.nodes;
     }, candidate => {
@@ -1051,9 +1055,9 @@ export class BrainOSGraphView extends FileView {
         await this.runEdit(async () => {
           const parentNode = parent ? this.nodes.find(node => node.path === parent) : undefined;
           const reference = chosen?.kind === "reference" ? chosen.node : undefined;
-          const key = reference ? (await referenceThoughtNode(this.app, target!, reference, parentNode, newPath), reference.path)
-            : insertion ? await insertThoughtNode(this.app, target!, label, insertion)
-            : await createThoughtNode(this.app, target!, label, "", parentNode ? { key: parentNode.path, title: parentNode.label, newPath } : undefined);
+          const key = reference ? (await referenceThoughtNode(this.app, target, reference, parentNode, newPath), reference.path)
+            : insertion ? await insertThoughtNode(this.app, target, label, insertion)
+            : await createThoughtNode(this.app, target, label, "", parentNode ? { key: parentNode.path, title: parentNode.label, newPath } : undefined);
           // Reusing a name keeps the original node's position.
           if (!this.snapshot.nodes.some(node => node.path === key)) this.plugin.layout.positions[key] = { x: draft.x, y: draft.y };
           const session = this.plugin.activeSession;
@@ -1070,7 +1074,7 @@ export class BrainOSGraphView extends FileView {
         if (committed && shouldContinue) await this.createRelative(true);
       })();
     };
-    title.onblur = () => requestAnimationFrame(() => {
+    title.onblur = () => this.contentEl.win.requestAnimationFrame(() => {
       if (this.editor !== form || this.busy || this.composing) return;
       if (title.value.trim()) form.requestSubmit();
       else { this.closeEditor(); this.setReadingMode(false); this.draw(); }
@@ -1146,7 +1150,7 @@ export class BrainOSGraphView extends FileView {
           if (this.editor === form) title.focus();
         });
       };
-      title.onblur = () => requestAnimationFrame(() => {
+      title.onblur = () => this.contentEl.win.requestAnimationFrame(() => {
         if (this.editor !== form || this.busy || this.composing) return;
         if (title.value.trim()) form.requestSubmit();
         else { this.closeEditor(); this.setReadingMode(false); this.draw(); }
@@ -1347,7 +1351,11 @@ class RemoveNodeModal extends Modal {
     this.contentEl.createEl("p", { text: this.owned ? "删除本文件中这个名称的全部记录及相邻连线。其他思考对它的引用会显示为失效；不会删除思考文件。" : "仅移除本思考中的引用及相邻关系，来源节点的标题和正文保持不变。" });
     new Setting(this.contentEl)
       .addButton(button => button.setButtonText("取消").onClick(() => this.close()))
-      .addButton(button => button.setButtonText(this.owned ? "删除节点" : "移除引用").setWarning().onClick(() => { this.close(); void this.remove(); }));
+      .addButton(button => {
+        if (requireApiVersion("1.13.0")) button.setDestructive();
+        else button.setClass("mod-warning");
+        button.setButtonText(this.owned ? "删除节点" : "移除引用").onClick(() => { this.close(); void this.remove(); });
+      });
   }
   onClose() { this.contentEl.empty(); }
 }

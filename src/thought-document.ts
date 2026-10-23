@@ -41,8 +41,8 @@ export function markdownLines(text: string) {
   for (const match of text.matchAll(/[^\n]*(?:\n|$)/g)) {
     if (!match[0]) continue;
     const raw = match[0].replace(/\r?\n$/, "");
-    if (match.index! < headerEnd) {
-      result.push({ text: raw, start: match.index!, end: match.index! + match[0].length, code: true });
+    if (match.index < headerEnd) {
+      result.push({ text: raw, start: match.index, end: match.index + match[0].length, code: true });
       continue;
     }
     const marker = raw.match(/^[ \t]*(\x60{3,}|~{3,})(.*)$/);
@@ -55,7 +55,7 @@ export function markdownLines(text: string) {
     const visible = raw.replace(/(\x60+).*?\1/g, "");
     if (!fence && visible.includes("<!--")) comment = !visible.includes("-->", visible.indexOf("<!--") + 4);
     else if (comment && raw.includes("-->")) comment = false;
-    result.push({ text: raw, start: match.index!, end: match.index! + match[0].length, code });
+    result.push({ text: raw, start: match.index, end: match.index + match[0].length, code });
   }
   return result;
 }
@@ -68,18 +68,18 @@ export function documentLinks(text: string, offset = 0): DocumentLink[] {
       .replace(/<!--.*?-->/g, value => " ".repeat(value.length));
     for (const match of visible.matchAll(/!?\[\[([^\]\n]+)\]\]/g)) {
       const [target, ...alias] = match[1].split("|");
-      const start = offset + line.start + match.index!;
+      const start = offset + line.start + match.index;
       links.push({ target: target.trim(), ...(alias.length ? { label: alias.join("|") } : {}),
-        start, end: start + match[0].length, original: text.slice(line.start + match.index!, line.start + match.index! + match[0].length) });
+        start, end: start + match[0].length, original: text.slice(line.start + match.index, line.start + match.index + match[0].length) });
     }
     for (const match of visible.matchAll(/!?\[([^\]\n]*)\]\(([^\s)]+)(?:\s+"[^"\n]*")?\)/g)) {
-      if (match.index! > 0 && visible[match.index! - 1] === "[") continue;
+      if (match.index > 0 && visible[match.index - 1] === "[") continue;
       let target: string;
       try { target = decodeURIComponent(match[2].replace(/^<|>$/g, "")); } catch { continue; }
       if (/^[a-z][a-z0-9+.-]*:/i.test(target)) continue;
-      const start = offset + line.start + match.index!;
+      const start = offset + line.start + match.index;
       links.push({ target, label: match[1], start, end: start + match[0].length,
-        original: text.slice(line.start + match.index!, line.start + match.index! + match[0].length) });
+        original: text.slice(line.start + match.index, line.start + match.index + match[0].length) });
     }
   }
   return links.sort((a, b) => a.start - b.start);
@@ -238,6 +238,6 @@ export function unlinkDocumentBody(markdown: string, nodeID: string, matches: (t
   return text;
 }
 export function wikiLink(target: string, title: string) {
-  if (/[\[\]\r\n|]/.test(target)) throw new Error("链接路径含有不支持的字符");
-  return "[[" + target + "|" + title.replace(/[\[\]|\r\n]/g, " ") + "]]";
+  if (/[[\]\r\n|]/.test(target)) throw new Error("链接路径含有不支持的字符");
+  return "[[" + target + "|" + title.replace(/[[\]|\r\n]/g, " ") + "]]";
 }

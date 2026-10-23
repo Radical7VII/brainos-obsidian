@@ -306,3 +306,12 @@ test('thought directory scopes reads, descendants and references without reading
   reads.length=0;const excluded=await buildThoughtSnapshot(f.app,f.files.get('其他/杂音.md'),'BrainOS');
   assert.equal(excluded.nodes.length,0);assert.deepEqual(reads,[]);
 });
+
+test('legacy state parsing rejects invalid objects and non-text drafts before migration',()=>{
+  const state=value=>'<!-- brainos-state\n'+JSON.stringify(value)+'\n-->';
+  for(const invalid of [null,[],{paths:[[]]},{paths:[{steps:[null]}]},{draft:123}]){
+    assert.equal(api.parseThoughtState(state(invalid)),null);
+  }
+  const valid={paths:[{steps:[{nodeID:'a'}]}],draft:'next idea'};
+  assert.deepEqual(api.parseThoughtState(state(valid)),valid);
+});

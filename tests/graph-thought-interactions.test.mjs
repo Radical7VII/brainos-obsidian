@@ -4,9 +4,10 @@ import {build} from 'esbuild';
 
 class Element {
   constructor(tag='div',options={}) {
-    this.tag=tag;this.children=[];this.style={};this.value=options.value??'';
+    this.ownerDocument={defaultView:{navigator:{platform:''}}};this.tag=tag;this.children=[];this.style={};this.value=options.value??'';
     this.text=options.text??'';this.options=options;this.clientWidth=900;this.clientHeight=600;this.offsetLeft=0;this.offsetTop=0;
   }
+  get win(){return {requestAnimationFrame:(...args)=>globalThis.requestAnimationFrame(...args),cancelAnimationFrame:(...args)=>globalThis.cancelAnimationFrame(...args)};}
   createEl(tag,options){const child=new Element(tag,options);this.children.push(child);return child;}
   createDiv(options){return this.createEl('div',options);}
   addEventListener(type,callback){(this.listeners??={})[type]??=[];this.listeners[type].push(callback);}
@@ -33,7 +34,7 @@ const bundle=await build({
     b.onResolve({filter:/^obsidian$/},()=>({path:'obsidian',namespace:'mock'}));
     b.onLoad({filter:/.*/,namespace:'mock'},args=>({loader:'js',contents:args.path==='layout'?
       'export class GraphLayout {sync(){}pin(){}movePinned(){}unpin(){}setSelected(){}configure(){}dispose(){}}':
-      'export class TFile{constructor(path){this.path=path;this.extension="md";this.basename=path.replace(/.*\\//,"").slice(0,-3);}};export const normalizePath=p=>p.replace(/\\/+/g,"/");export class FileView{constructor(leaf){this.leaf=leaf;this.app=leaf.app;this.contentEl=leaf.element;}};export class Notice{constructor(text){globalThis.lastNotice=text;}};export class AbstractInputSuggest{       constructor(app,input){this.input=input;let revision=0;input.addEventListener("input",async()=>{const current=++revision;const rows=await this.getSuggestions(input.value);if(current!==revision)return;this.rendered=rows;if(rows.length)this.open();else this.close();});}       setValue(value){this.input.value=value;}open(){}close(){}     };export const prepareFuzzySearch=query=>text=>text.toLowerCase().includes(query.toLowerCase())?{score:1}:null;export class Modal{};export class SuggestModal{};export class Component{};export class MarkdownView{};export class Menu{};export class Setting{};export const MarkdownRenderer={};export const parseLinktext=p=>({path:p,subpath:""});export const getAllTags=()=>[];export const setIcon=()=>{};'}));
+      'export class TFile{constructor(path){this.path=path;this.extension="md";this.basename=path.replace(/.*\\//,"").slice(0,-3);}};export const normalizePath=p=>p.replace(/\\/+/g,"/");export class FileView{constructor(leaf){this.leaf=leaf;this.app=leaf.app;this.contentEl=leaf.element;}};export class Notice{constructor(text){globalThis.lastNotice=text;}};export class AbstractInputSuggest{       constructor(app,input){this.input=input;let revision=0;input.addEventListener("input",async()=>{const current=++revision;const rows=await this.getSuggestions(input.value);if(current!==revision)return;this.rendered=rows;if(rows.length)this.open();else this.close();});}       setValue(value){this.input.value=value;}open(){}close(){}     };export const prepareFuzzySearch=query=>text=>text.toLowerCase().includes(query.toLowerCase())?{score:1}:null;export class Modal{};export class SuggestModal{};export class Component{};export class MarkdownView{};export class Menu{};export class Setting{};export const MarkdownRenderer={};export const parseLinktext=p=>({path:p,subpath:""});export const getAllTags=()=>[];export const setIcon=()=>{};export const requireApiVersion=()=>false;export const setTooltip=()=>{};'}));
   }}],
 });
 const {BrainOSGraphView,defaultGraphOptions,buildThoughtSnapshot,nodeKey,titleID,TFile}=await import('data:text/javascript;base64,'+Buffer.from(bundle.outputFiles[0].text).toString('base64'));
@@ -664,4 +665,14 @@ test('node click requests reading, while a blank click, Escape and file changes 
   f.view.setReadingMode(true);f.view.onKeyDown({key:'Escape',preventDefault(){}});assert.equal(f.view.readingRequested,false);
   f.view.setReadingMode(true);await f.view.onLoadFile(f.app.vault.getAbstractFileByPath('Thoughts/sub/B.md'));
   assert.equal(f.view.readingRequested,false);
+});
+
+test('zoom animation uses the graph window rather than the main-window scheduler',async()=>{
+  const {view,element}=await fixture('- A\n');
+  const frames=[];
+  Object.defineProperty(element,'win',{value:{requestAnimationFrame:callback=>{frames.push(callback);return 731;}}});
+  view.zoomAnchor={x:350,y:250};view.targetZoom=1.5;view.animateZoom();
+  assert.equal(view.cameraFrame,731);assert.equal(frames.length,1);
+  // A second request must not schedule another frame while this window owns one.
+  view.animateZoom();assert.equal(frames.length,1);
 });

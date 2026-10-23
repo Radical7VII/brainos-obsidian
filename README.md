@@ -62,6 +62,7 @@ Use Node.js 22 and the committed lockfile:
 
 ```sh
 npm ci
+npm run lint
 npm test
 npm run build
 ```

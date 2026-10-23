@@ -23,7 +23,7 @@ export function loadGraphOptions(value: unknown): GraphOptions {
   const number = (record: Record<string, unknown>, key: string, fallback: number, min: number, max: number) => {
     const value = record[key]; return typeof value === "number" && Number.isFinite(value) ? Math.max(min, Math.min(max, value)) : fallback;
   };
-  const bool = (record: Record<string, unknown>, key: string, fallback: boolean) => typeof record[key] === "boolean" ? record[key] as boolean : fallback;
+  const bool = (record: Record<string, unknown>, key: string, fallback: boolean) => typeof record[key] === "boolean" ? record[key] : fallback;
   return {
     source: raw.source === "vault" ? "vault" : "thoughts",
     hiddenPaths: Array.isArray(raw.hiddenPaths) ? raw.hiddenPaths.filter((path): path is string => typeof path === "string") : [],

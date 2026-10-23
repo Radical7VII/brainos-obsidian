@@ -1,19 +1,23 @@
 {
   "name": "brainos-obsidian",
-  "version": "0.2.3",
+  "version": "0.2.5",
   "private": true,
   "description": "BrainOS Markdown thought paths and graph workflow for Obsidian",
   "scripts": {
     "build": "npm run typecheck && node esbuild.mjs",
     "typecheck": "tsc --noEmit",
     "dev": "node esbuild.mjs --watch",
-    "test": "node --test tests/*.test.mjs"
+    "test": "node --test tests/*.test.mjs",
+    "lint": "eslint src --max-warnings 0"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",
     "esbuild": "^0.25.9",
+    "eslint": "^9.39.4",
+    "eslint-plugin-obsidianmd": "^0.4.2",
     "obsidian": "^1.8.7",
-    "typescript": "^5.7.2"
+    "typescript": "^5.7.2",
+    "typescript-eslint": "^8.72.0"
   },
   "license": "Apache-2.0"
 }

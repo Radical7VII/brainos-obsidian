@@ -306,7 +306,7 @@ export default class BrainOSPlugin extends Plugin {
     }
     const path = thoughtPath?.trim() || undefined;
     const thoughtFile = path ? this.app.vault.getAbstractFileByPath(path) : undefined;
-    const thoughtTitle = thoughtFile instanceof TFile
+    const thoughtTitle: unknown = thoughtFile instanceof TFile
       ? this.app.metadataCache.getFileCache(thoughtFile)?.frontmatter?.title
       : undefined;
     const title = path
@@ -371,18 +371,30 @@ class BrainOSSettingTab extends PluginSettingTab {
     plugin.register(() => this.folderSuggest?.dispose());
   }
   hide() { this.folderSuggest?.dispose(); this.folderSuggest = undefined; }
+  getSettingDefinitions() {
+    return [
+      { name: "思考目录", desc: "填写笔记库内的文件夹路径，例如 BrainOS/思考。新思考保存到这里，节点检索仅包含此目录及子目录的 Markdown；留空使用整个笔记库。",
+        render: (setting: Setting) => { this.hide(); this.renderFolder(setting); return () => this.hide(); } },
+      { name: "重新生成布局", desc: "删除保存的坐标，下一次打开图谱时自动排列节点。",
+        render: (setting: Setting) => this.renderReset(setting) },
+    ];
+  }
+  // Obsidian < 1.13 uses this fallback; newer versions index and render definitions.
   display() {
-    this.hide();
-    this.containerEl.empty();
-    new Setting(this.containerEl).setName("思考目录")
-      .setDesc("填写笔记库内的文件夹路径，例如 BrainOS/思考。新思考保存到这里，节点检索仅包含此目录及子目录的 Markdown；留空使用整个笔记库。")
-      .addText(text => {
+    this.hide(); this.containerEl.empty();
+    for (const definition of this.getSettingDefinitions()) {
+      definition.render(new Setting(this.containerEl).setName(definition.name).setDesc(definition.desc));
+    }
+  }
+  private renderFolder(setting: Setting) {
+    setting.addText(text => {
         const updateFolder = async (value: string) => {
           const folder = value.trim();
           this.plugin.layout.settings.noteFolder = folder;
           await this.plugin.saveLayout();
           for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE)) {
-            const view = leaf.view as BrainOSGraphView;
+            const view = leaf.view;
+            if (!(view instanceof BrainOSGraphView)) continue;
             if (view.file && !isThoughtFile(view.file.path, folder)) await this.plugin.openMarkdownView(leaf, view.file);
             else { view.cancelNodeEditing(); }
           }
@@ -393,9 +405,9 @@ class BrainOSSettingTab extends PluginSettingTab {
           () => this.app.vault.getAllLoadedFiles().filter((file): file is TFolder => file instanceof TFolder).map(folder => folder.path),
           updateFolder);
       });
-    new Setting(this.containerEl).setName("重新生成布局")
-      .setDesc("删除保存的坐标，下一次打开图谱时自动排列节点。")
-      .addButton(button => button.setButtonText("重置").onClick(async () => {
+  }
+  private renderReset(setting: Setting) {
+    setting.addButton(button => button.setButtonText("重置").onClick(async () => {
         this.plugin.layout.positions = {}; await this.plugin.saveLayout(); this.plugin.refreshViews(); new Notice("图谱布局已重置");
       }));
   }

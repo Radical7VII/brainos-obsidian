@@ -107,6 +107,7 @@ BrainOS 将链接别名解释为来源文件内的节点名称，普通 Obsidian
 
 ```sh
 npm ci
+npm run lint
 npm run build
 npm test
 ```

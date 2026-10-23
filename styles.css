@@ -1,4 +1,4 @@
-.brainos-graph-view { position: relative; display: flex; flex-direction: column; height: 100%; padding: 0 !important; overflow: hidden; background: var(--graph-background, var(--background-primary)); }
+.workspace-leaf-content .view-content.brainos-graph-view { position: relative; display: flex; flex-direction: column; height: 100%; padding: 0; overflow: hidden; background: var(--graph-background, var(--background-primary)); }
 .brainos-graph-canvas { display: block; width: 100%; height: 100%; flex: 1 1 auto; min-height: 0; cursor: default; touch-action: none; }
 .brainos-graph-canvas.is-touch-panning { cursor: move; }
 .brainos-graph-canvas.is-dragging { cursor: grabbing; }
@@ -22,7 +22,7 @@
 .brainos-node-editor { box-sizing: border-box; max-height: calc(100% - 16px); overflow: auto; position: absolute; z-index: 2; width: min(320px, calc(100% - 16px)); padding: 12px; display: flex; flex-direction: column; gap: 8px; border: 1px solid var(--background-modifier-border); border-radius: 8px; background: var(--background-primary); box-shadow: var(--shadow-l); }
 .brainos-node-editor input, .brainos-node-editor textarea, .brainos-node-editor select { width: 100%; box-sizing: border-box; }
 .brainos-node-editor textarea { min-height: 120px; resize: vertical; font-family: var(--font-monospace); }
-.brainos-node-editor-document { min-height: 260px !important; }
+.brainos-node-editor textarea.brainos-node-editor-document { min-height: 260px; }
 .brainos-node-candidates { display: flex; flex-direction: column; gap: 2px; max-height: 180px; overflow: auto; margin: -2px 0 2px; }
 .brainos-node-candidate { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; width: 100%; padding: 6px 8px; border: 0; border-radius: 5px; background: transparent; color: var(--text-normal); text-align: left; cursor: pointer; }
 .brainos-node-candidate:hover, .brainos-node-candidate.is-selected { background: var(--background-modifier-hover); }
@@ -35,8 +35,8 @@
 
 /* New nodes are edited directly beneath their Canvas circle. */
 .brainos-node-title-editor { position: absolute; z-index: 2; transform: translateX(-50%); margin: 0; padding: 0; border: 0; background: transparent; box-shadow: none; }
-.brainos-node-title-input { width: 110px; max-width: min(420px, 70vw); height: 30px; padding: 3px 6px !important; border: 0 !important; border-bottom: 1px solid var(--interactive-accent) !important; border-radius: 0 !important; background: var(--graph-background, var(--background-primary)) !important; box-shadow: none !important; color: var(--graph-text, var(--text-normal)); font: 14px var(--font-interface); text-align: center; outline: none; }
-.brainos-node-title-input:focus { box-shadow: none !important; }
+.brainos-graph-view .brainos-node-title-editor input.brainos-node-title-input { width: 110px; max-width: min(420px, 70vw); height: 30px; padding: 3px 6px; border: 0; border-bottom: 1px solid var(--interactive-accent); border-radius: 0; background: var(--graph-background, var(--background-primary)); box-shadow: none; color: var(--graph-text, var(--text-normal)); font: 14px var(--font-interface); text-align: center; outline: none; }
+.brainos-graph-view .brainos-node-title-editor input.brainos-node-title-input:focus { box-shadow: none; }
 .brainos-graph-canvas:focus { outline: none; }
 
 .brainos-graph-canvas.is-edge-hovered { cursor: pointer; }

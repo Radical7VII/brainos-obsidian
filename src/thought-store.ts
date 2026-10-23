@@ -29,7 +29,7 @@ export async function loadThoughtDocument(app: App, file: TFile, folder?: string
   let markdown = stripBrainOSProperties(original.replace(LEGACY_STATE, "")).trimEnd();
   if (state.draft?.trim()) markdown += "\n\n" + state.draft.trim() + "\n";
   const byLegacyID = new Map(app.vault.getMarkdownFiles().filter(file => folder === undefined || isThoughtFile(file.path, folder)).flatMap(atom => {
-    const id = app.metadataCache.getFileCache(atom)?.frontmatter?.brainos_id;
+    const id: unknown = app.metadataCache.getFileCache(atom)?.frontmatter?.brainos_id;
     return id == null ? [] : [[String(id).toLowerCase(), atom] as const];
   }));
   const imported = new Map<string, string>(), used = new Set<string>();

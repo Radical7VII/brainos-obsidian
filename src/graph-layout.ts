@@ -1,3 +1,4 @@
+import type { LayoutCommand, LayoutResult } from "./layout-protocol";
 import workerSource from "./layout-worker.ts?worker";
 import { ForceLayout, ForceOptions } from "./force-layout";
 import type { GraphEdge, GraphNode, Point } from "./thoughts";
@@ -22,7 +23,7 @@ export class GraphLayout {
     try {
       const url = URL.createObjectURL(new Blob([workerSource], { type: "text/javascript" }));
       try { this.worker = new Worker(url); } finally { URL.revokeObjectURL(url); }
-      this.worker.onmessage = event => {
+      this.worker.onmessage = (event: MessageEvent<LayoutResult>) => {
         const value = event.data;
         if (this.disposed || value.revision !== this.revision || value.commandVersion !== this.commandVersion || !(value.positions instanceof Float32Array) || value.positions.length !== this.nodes.length * 2) return;
         this.nodes.forEach((node, index) => {
@@ -43,7 +44,7 @@ export class GraphLayout {
     this.fallback.sync(this.nodes, this.edges, this.positions, this.local); this.fallback.setSelected(this.selected);
     for (const [path, point] of this.pinned) this.fallback.pin(path, point);
   }
-  private send(message: object) {
+  private send(message: LayoutCommand) {
     if (!this.disposed && this.worker) this.worker.postMessage({ ...message, commandVersion: ++this.commandVersion });
   }
   sync(nodes: readonly GraphNode[], edges: readonly GraphEdge[], saved: Record<string, Point>, local = false) {
@@ -56,7 +57,7 @@ export class GraphLayout {
     }
     this.positions = current;
     if (this.fallback) this.fallback.sync(nodes, edges, this.positions, local);
-    else { this.running = nodes.length > 0; this.send({ type: "sync", revision: this.revision, nodes, edges, saved: this.positions, local }); }
+    else { this.running = nodes.length > 0; this.send({ type: "sync", revision: this.revision, nodes: this.nodes, edges: this.edges, saved: this.positions, local }); }
   }
   configure(options: Partial<ForceOptions>) { this.options = { ...this.options, ...options }; this.fallback?.configure(options); this.send({ type: "configure", options }); }
   setSelected(path: string | undefined) { this.selected = path; this.fallback?.setSelected(path); this.send({ type: "selected", path }); }

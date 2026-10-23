@@ -1,14 +1,15 @@
-import { ForceLayout, ForceOptions } from "./force-layout";
-import type { GraphNode, GraphEdge, Point } from "./thoughts";
+import { ForceLayout } from "./force-layout";
+import type { GraphNode } from "./thoughts";
+import type { LayoutRequest, LayoutResult } from "./layout-protocol";
 
 const layout = new ForceLayout();
 let nodes: GraphNode[] = [];
 let revision = 0;
 let commandVersion = 0;
-let timer: ReturnType<typeof setTimeout> | undefined;
+let timer: number | undefined;
 const scope = self as unknown as {
-  onmessage: ((event: MessageEvent) => void) | null;
-  postMessage(value: unknown, transfer?: Transferable[]): void;
+  onmessage: ((event: MessageEvent<LayoutRequest>) => void) | null;
+  postMessage(value: LayoutResult, transfer?: Transferable[]): void;
 };
 function publish() {
   const positions = new Float32Array(nodes.length * 2);
@@ -19,9 +20,9 @@ function run() {
   timer = undefined;
   layout.tick(nodes);
   publish();
-  if (layout.isRunning) timer = setTimeout(run, 1000 / 60);
+  if (layout.isRunning) timer = self.setTimeout(run, 1000 / 60);
 }
-function start() { if (timer === undefined) timer = setTimeout(run, 0); }
+function start() { if (timer === undefined) timer = self.setTimeout(run, 0); }
 
 scope.onmessage = event => {
   const message = event.data;
@@ -30,9 +31,9 @@ scope.onmessage = event => {
     case "sync":
       revision = message.revision;
       nodes = message.nodes;
-      layout.sync(nodes, message.edges as GraphEdge[], message.saved as Record<string, Point>, !!message.local);
+      layout.sync(nodes, message.edges, message.saved, !!message.local);
       break;
-    case "configure": layout.configure(message.options as Partial<ForceOptions>); break;
+    case "configure": layout.configure(message.options); break;
     case "selected": layout.setSelected(message.path); break;
     case "pin": layout.pin(message.path, message.point); break;
     case "move": layout.movePinned(message.path, message.point); break;

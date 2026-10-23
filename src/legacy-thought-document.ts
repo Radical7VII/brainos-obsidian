@@ -23,7 +23,7 @@ export function markdownLines(text: string) {
       if (!fence) fence = { char: marker[1][0], length: marker[1].length };
       else if (marker[1][0] === fence.char && marker[1].length >= fence.length && !marker[2].trim()) fence = undefined;
     }
-    result.push({ text: raw, start: match.index!, end: match.index! + match[0].length, code });
+    result.push({ text: raw, start: match.index, end: match.index + match[0].length, code });
   }
   return result;
 }
@@ -41,17 +41,17 @@ export function documentLinks(text: string, offset = 0): DocumentLink[] {
     const visible = line.text.replace(/(`+).*?\1/g, value => " ".repeat(value.length));
     for (const match of visible.matchAll(/!?\[\[([^\]\n]+)\]\]/g)) {
       const [target, ...alias] = match[1].split("|");
-      const start = offset + line.start + match.index!;
+      const start = offset + line.start + match.index;
       links.push({ target: target.trim(), ...(alias.length ? { label: alias.join("|") } : {}), start,
-        end: start + match[0].length, original: text.slice(line.start + match.index!, line.start + match.index! + match[0].length) });
+        end: start + match[0].length, original: text.slice(line.start + match.index, line.start + match.index + match[0].length) });
     }
     for (const match of visible.matchAll(/!?\[([^\]\n]*)\]\(([^\s)]+)(?:\s+"[^"\n]*")?\)/g)) {
-      if (match.index! > 0 && visible[match.index! - 1] === "[") continue;
+      if (match.index > 0 && visible[match.index - 1] === "[") continue;
       let target: string;
       try { target = decodeURIComponent(match[2].replace(/^<|>$/g, "")); } catch { continue; }
       if (/^[a-z][a-z0-9+.-]*:/i.test(target)) continue;
-      const start = offset + line.start + match.index!;
-      links.push({ target, label: match[1], start, end: start + match[0].length, original: text.slice(line.start + match.index!, line.start + match.index! + match[0].length) });
+      const start = offset + line.start + match.index;
+      links.push({ target, label: match[1], start, end: start + match[0].length, original: text.slice(line.start + match.index, line.start + match.index + match[0].length) });
     }
   }
   return links.sort((a, b) => a.start - b.start);

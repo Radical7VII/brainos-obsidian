@@ -208,3 +208,14 @@ test('shared canvas migration keeps positions, settings and sessions while optin
   await f.plugin.onload();assert.equal(f.plugin.layout.graph.source,'thoughts');
   assert.deepEqual(f.plugin.layout.positions,{a:{x:10,y:20}});assert.equal(f.plugin.layout.settings.noteFolder,'Thoughts');assert.equal(f.plugin.layout.sessions[0].id,'old');
 });
+
+test('declarative settings expose searchable rows while keeping folder suggestions and cleanup',async()=>{
+  const f=fixture();f.plugin.app.workspace.iterateAllLeaves=()=>{};
+  f.plugin.app.vault.getAllLoadedFiles=()=>[new TFolder('BrainOS')];
+  let tab;f.plugin.addSettingTab=value=>{tab=value;};await f.plugin.onload();
+  const definitions=tab.getSettingDefinitions();
+  assert.deepEqual(definitions.map(row=>row.name),['思考目录','重新生成布局']);
+  const cleanup=definitions[0].render(new Setting());
+  const suggest=tab.folderSuggest;assert.deepEqual(suggest.getSuggestions(''),['/','BrainOS']);
+  cleanup();assert.deepEqual(suggest.getSuggestions(''),[]);assert.equal(tab.folderSuggest,undefined);
+});

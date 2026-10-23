@@ -33,6 +33,7 @@ jobs:
           const versions = JSON.parse(fs.readFileSync('versions.json', 'utf8'));
           if (manifest.version !== process.env.RELEASE_VERSION || pkg.version !== manifest.version || versions[manifest.version] !== manifest.minAppVersion) throw new Error('Release versions must match');
           JS
+      - run: npm run lint
       - run: npm test
       - run: npm run build
       - name: Verify reproducible artifact

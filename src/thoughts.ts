@@ -31,11 +31,13 @@ export function parseThoughtState(markdown: string): ThoughtState | null {
   const match = markdown.match(STATE_BLOCK);
   if (!match) return null;
   try {
-    const value = JSON.parse(match[1]);
-    if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-    if (value.paths !== undefined && (!Array.isArray(value.paths) || value.paths.some((path: ThoughtPath) =>
-      !path || typeof path !== "object" || (path.steps !== undefined && (!Array.isArray(path.steps) || path.steps.some(step => !step || typeof step !== "object")))))) return null;
-    return value as ThoughtState;
+    const value: unknown = JSON.parse(match[1]);
+    const record = (input: unknown): input is Record<string, unknown> => !!input && typeof input === "object" && !Array.isArray(input);
+    if (!record(value)) return null;
+    if (value.paths !== undefined && (!Array.isArray(value.paths) || value.paths.some((path: unknown) =>
+      !record(path) || (path.steps !== undefined && (!Array.isArray(path.steps) || path.steps.some((step: unknown) => !record(step))))))) return null;
+    if (value.draft !== undefined && typeof value.draft !== "string") return null;
+    return value;
   } catch { return null; }
 }
 
