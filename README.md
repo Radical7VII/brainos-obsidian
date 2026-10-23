@@ -1,5 +1,7 @@
 # BrainOS Graph for Obsidian
 
+Record thought paths in plain Markdown and explore them as an editable graph.
+
 一份普通 MD 文件对应一次思考。用列表记录一段段思考路径：同名条目复用同一个节点，但每次经过时补充的正文分别保留。图谱由文件重建，节点内容和连接不依赖另一份 JSON 数据。
 
 ## 文件格式
@@ -86,13 +88,23 @@ BrainOS 将链接别名解释为来源文件内的节点名称，普通 Obsidian
 ## 构建和安装
 
 ```sh
-npm install
+npm ci
 npm run build
 npm test
 ```
 
-把 `manifest.json`、`main.js`、`styles.css` 放入笔记库的 `.obsidian/plugins/brainos-graph/`，保留已有 `data.json` 和启用配置，重载插件。构建输出在项目根目录。
+从 [GitHub Releases](https://github.com/Radical7VII/brainos-obsidian/releases) 下载 `manifest.json`、`main.js`、`styles.css` 三个附件，放入笔记库的 `.obsidian/plugins/brainos-graph/`，保留已有 `data.json` 和启用配置，重载插件。构建输出在项目根目录。
 
 可选的笔记双链模式继续通过 Obsidian metadataCache 构图；默认共享思考画布读取目录内的列表路径。布局使用原创 Worker、Barnes–Hut 排斥及预测碰撞，详见 [图谱优化记录](docs/GRAPH_RECONSTRUCTION.md)。
 
-当前实现包含列表存储、图谱编辑和按次正文编辑。泳道视图、过程回放、AI 对话自动生成尚未实现；`src/ai.ts` 仍是 provider 接口，不会发送内容。测试包含真实解析／存储逻辑和 Obsidian API／DOM 模拟交互；共享画布及原生侧栏切换、预览已在 macOS Obsidian 1.14.4 中验证，其他交互未做完整真机回归。
+当前实现包含列表存储、图谱编辑和节点标题原位编辑；正文在 Markdown 编辑视图中修改。泳道视图、过程回放、AI 对话自动生成尚未实现；`src/ai.ts` 仍是 provider 接口，不会发送内容。共享画布及原生侧栏切换、预览已在 macOS Obsidian 1.14.4 中验证。自动化测试包含真实解析／存储逻辑和 Obsidian API／DOM 模拟交互，不代表已经覆盖所有 Obsidian 版本、移动设备和第三方主题。部分原生界面集成使用内部 API，可能受 Obsidian 更新影响。
+
+## 隐私
+
+插件在本地处理笔记，不发送笔记内容、不收集遥测，不需要账号或联网服务。图谱布局在本地 Worker 中计算。插件会根据你的编辑操作修改笔记，建议保留笔记库备份。
+
+## 许可与贡献
+
+本项目采用 [Apache License 2.0](LICENSE)，允许商业使用、修改和分发，使用时需遵守许可证中的声明保留等要求。贡献者保留自己的版权；提交贡献时按相同许可证授权，详见 [贡献指南](CONTRIBUTING.md)。
+
+插件用于验证 BrainOS 的产品想法。未来独立产品可以采用不同的发布方式；已经按 Apache-2.0 发布的代码仍按该许可证提供。

@@ -3,10 +3,8 @@
   "name": "BrainOS Graph",
   "version": "0.2.0",
   "minAppVersion": "1.5.7",
-  "description": "用普通 Markdown 列表记录思考路径，支持节点复用、独立想法和图谱编辑。",
+  "description": "Record thought paths in Markdown lists and explore an editable graph with reusable nodes.",
   "author": "BrainOS",
   "isDesktopOnly": false,
-  "fundingUrl": "",
-  "authorUrl": "",
-  "repo": ""
+  "authorUrl": "https://github.com/Radical7VII"
 }
