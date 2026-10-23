@@ -16,7 +16,7 @@ Record thought paths in plain Markdown and explore them as an editable graph.
 
 ![实机操作：空格编辑节点标题、Tab 延伸、输入时出现候选并复用已有节点](docs/assets/brainos-workflow.gif)
 
-GIF 由真实界面截图组成，仅裁切画面并调整播放停顿，没有生成或拼接虚构的界面元素。
+GIF 来自约 30 帧/秒的演示窗口连续实机录制，裁切后按原速播放。
 
 ### 输入时显示节点候选
 

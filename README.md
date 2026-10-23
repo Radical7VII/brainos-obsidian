@@ -16,7 +16,7 @@ Select a node and press **Space** to edit its title in place. Press **Tab** to e
 
 ![Real Obsidian workflow: edit a node title, extend with Tab, and select an existing node from live suggestions](docs/assets/brainos-workflow.gif)
 
-The GIF uses real app captures, cropped and paced for readability. No application UI is generated or composited.
+The GIF comes from a continuous recording of the demo window at approximately 30 fps, cropped and played at its original speed.
 
 ### Live node suggestions
 

@@ -1,16 +1,39 @@
 """Package real Obsidian captures; never draw or synthesize application UI.
 
 Usage: python3 scripts/build-readme-media.py /path/to/capture-directory
-Requires Pillow. See docs/assets/README.md for capture details.
+Or: python3 scripts/build-readme-media.py --video /path/to/recording.mp4
+Requires Pillow for screenshots, FFmpeg for video. See docs/assets/README.md.
 """
 from pathlib import Path
+import argparse
 import json
-import sys
+import subprocess
 from PIL import Image
 
-source = Path(sys.argv[1])
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument('capture_directory', nargs='?', type=Path)
+parser.add_argument('--video', type=Path, help='Continuous recording of the demo window')
+parser.add_argument('--start', type=float, default=20)
+parser.add_argument('--duration', type=float, default=20)
+args = parser.parse_args()
+if args.video is None and args.capture_directory is None:
+    parser.error('provide a capture directory or --video')
+source = args.capture_directory
 output = Path(__file__).resolve().parents[1] / 'docs' / 'assets'
 output.mkdir(parents=True, exist_ok=True)
+if args.video is not None:
+    # Preserve real-time motion; sample at 30 fps without motion interpolation.
+    subprocess.run([
+        'ffmpeg', '-hide_banner', '-loglevel', 'error',
+        '-ss', str(args.start), '-t', str(args.duration), '-i', str(args.video),
+        '-filter_complex',
+        '[0:v]fps=30,crop=1300:710:250:250,split[a][b];'
+        '[a]palettegen=stats_mode=diff[p];'
+        '[b][p]paletteuse=dither=bayer:bayer_scale=3:diff_mode=rectangle',
+        '-loop', '0', '-y', str(output / 'brainos-workflow.gif')
+    ], check=True)
+    print(f"brainos-workflow.gif: {(output / 'brainos-workflow.gif').stat().st_size:,} bytes")
+    raise SystemExit(0)
 frames = json.loads((source / 'frames.json').read_text())
 
 # Keep the full app window in the overview; the second image is a detail crop.
