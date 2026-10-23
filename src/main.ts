@@ -374,7 +374,6 @@ class BrainOSSettingTab extends PluginSettingTab {
   display() {
     this.hide();
     this.containerEl.empty();
-    new Setting(this.containerEl).setName("BrainOS Graph").setHeading();
     new Setting(this.containerEl).setName("思考目录")
       .setDesc("填写笔记库内的文件夹路径，例如 BrainOS/思考。新思考保存到这里，节点检索仅包含此目录及子目录的 Markdown；留空使用整个笔记库。")
       .addText(text => {

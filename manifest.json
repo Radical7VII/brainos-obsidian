@@ -1,7 +1,7 @@
 {
   "id": "brainos-graph",
   "name": "BrainOS Graph",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "minAppVersion": "1.7.2",
   "description": "Record thought paths in Markdown lists and explore an editable graph with reusable nodes.",
   "author": "BrainOS",

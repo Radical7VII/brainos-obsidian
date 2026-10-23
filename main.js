@@ -4530,7 +4530,6 @@ var BrainOSSettingTab = class extends import_obsidian8.PluginSettingTab {
   display() {
     this.hide();
     this.containerEl.empty();
-    new import_obsidian8.Setting(this.containerEl).setName("BrainOS Graph").setHeading();
     new import_obsidian8.Setting(this.containerEl).setName("\u601D\u8003\u76EE\u5F55").setDesc("\u586B\u5199\u7B14\u8BB0\u5E93\u5185\u7684\u6587\u4EF6\u5939\u8DEF\u5F84\uFF0C\u4F8B\u5982 BrainOS/\u601D\u8003\u3002\u65B0\u601D\u8003\u4FDD\u5B58\u5230\u8FD9\u91CC\uFF0C\u8282\u70B9\u68C0\u7D22\u4EC5\u5305\u542B\u6B64\u76EE\u5F55\u53CA\u5B50\u76EE\u5F55\u7684 Markdown\uFF1B\u7559\u7A7A\u4F7F\u7528\u6574\u4E2A\u7B14\u8BB0\u5E93\u3002").addText((text) => {
       const updateFolder = async (value) => {
         const folder = value.trim();
