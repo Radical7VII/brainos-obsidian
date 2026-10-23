@@ -4,6 +4,26 @@ Record thought paths in plain Markdown and explore them as an editable graph.
 
 一份普通 MD 文件对应一次思考。用列表记录一段段思考路径：同名条目复用同一个节点，但每次经过时补充的正文分别保留。图谱由文件重建，节点内容和连接不依赖另一份 JSON 数据。
 
+## 实机截图与操作演示
+
+以下内容实拍于 macOS 的 Obsidian 1.14.4，插件版本为 BrainOS Graph 0.2.6，使用默认浅色主题和独立演示库。
+
+![Obsidian 中的 BrainOS 图谱：两条思考路径从同一个问题出发，汇合到用户反馈](docs/assets/brainos-graph.png)
+
+### 原位改名与节点复用
+
+选中节点后按 **空格**，直接修改标题；按 **Tab** 延伸思路，输入文字后从候选中选择已有节点。演示结束时仍为四个节点，没有生成重复的“收集用户反馈”。
+
+![实机操作：空格编辑节点标题、Tab 延伸、输入时出现候选并复用已有节点](docs/assets/brainos-workflow.gif)
+
+GIF 由真实界面截图组成，仅裁切画面并调整播放停顿，没有生成或拼接虚构的界面元素。
+
+### 输入时显示节点候选
+
+候选只检索设置的思考目录中的节点，来源文件用于区分同名内容。
+
+![真实插件中的节点候选列表](docs/assets/brainos-node-suggestions.png)
+
 ## Installation
 
 Requires Obsidian 1.7.2 or later.
@@ -12,7 +32,7 @@ Requires Obsidian 1.7.2 or later.
 2. Create `.obsidian/plugins/brainos-graph/` inside your vault and place the three files there.
 3. Reload Obsidian and enable **BrainOS Graph** in Settings → Community plugins.
 
-The community directory listing is subject to Obsidian review. Manual installation is available in the meantime.
+插件已发布到 [Obsidian 社区目录](https://community.obsidian.md/plugins/brainos-graph)。如果客户端的插件列表尚未同步，可以先按上述步骤手动安装。
 
 ## Basic usage
 

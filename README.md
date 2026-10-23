@@ -4,9 +4,29 @@ Record thought paths in plain Markdown and explore them as an editable graph. Ea
 
 [中文文档](README.zh-CN.md)
 
+## See it in Obsidian
+
+Actual captures of BrainOS Graph 0.2.6 running in Obsidian 1.14.4 on macOS, using a separate demo vault and the default light theme.
+
+![BrainOS Graph running in Obsidian, showing two thought paths that share a starting point and converge on feedback](docs/assets/brainos-graph.png)
+
+### Edit titles and reuse nodes
+
+Select a node and press **Space** to edit its title in place. Press **Tab** to extend the path, then type to find and reuse an existing node. The recording finishes with the same four nodes, without creating a duplicate feedback node.
+
+![Real Obsidian workflow: edit a node title, extend with Tab, and select an existing node from live suggestions](docs/assets/brainos-workflow.gif)
+
+The GIF uses real app captures, cropped and paced for readability. No application UI is generated or composited.
+
+### Live node suggestions
+
+Suggestions contain nodes from the configured thought folder; the source file helps distinguish matching titles.
+
+![Native node suggestion popup while typing a new node title in the real plugin](docs/assets/brainos-node-suggestions.png)
+
 ## Installation
 
-Requires Obsidian 1.7.2 or later. The community directory listing is subject to review; manual installation is available now.
+Requires Obsidian 1.7.2 or later. See the [community listing](https://community.obsidian.md/plugins/brainos-graph). If the plugin has not appeared in your app's directory yet, install it manually:
 
 1. Download `main.js`, `manifest.json`, and `styles.css` from [the latest release](https://github.com/Radical7VII/brainos-obsidian/releases/latest).
 2. Create `.obsidian/plugins/brainos-graph/` inside your vault and place the three files there.
