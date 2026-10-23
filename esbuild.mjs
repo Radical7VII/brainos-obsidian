@@ -1,5 +1,10 @@
 import esbuild from "esbuild";
 import path from "node:path";
+import { readFileSync } from "node:fs";
+
+// Preserve the license for esbuild helpers injected into the distributed bundle.
+const esbuildLicense = readFileSync(new URL("./node_modules/esbuild/LICENSE.md", import.meta.url), "utf8").trim();
+const licenseBanner = `/*! esbuild generated runtime helpers\n${esbuildLicense}\n*/`;
 
 const watch = process.argv.includes("--watch");
 const context = await esbuild.context({
@@ -10,6 +15,7 @@ const context = await esbuild.context({
   platform: "node",
   target: "es2018",
   sourcemap: watch ? "inline" : false,
+  banner: { js: licenseBanner },
   outfile: "main.js",
   logLevel: "info",
   plugins: [{

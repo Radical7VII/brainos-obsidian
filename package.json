@@ -1,6 +1,6 @@
 {
   "name": "brainos-obsidian",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "private": true,
   "description": "BrainOS Markdown thought paths and graph workflow for Obsidian",
   "scripts": {
