@@ -135,3 +135,27 @@ test('reading projection moves an earlier merge after its parents and retains cy
   assert.equal(cycle.occurrences.length, 2);
   assert.deepEqual(lanes(cycle).rows[1].returns, [0]);
 });
+
+test('projection preserves independent roots, duplicate relations, self loops and unresolved targets', () => {
+  const doc = parse('- 合并\n  → 合并\n\n- A\n  → 合并\n  → 尚未定义\n\n- B\n  → 合并\n\n- A\n  补充\n  → 合并\n\n- 独立\n');
+  const projected = api.projectThoughtNodes(doc);
+  assert.deepEqual(projected.doc.occurrences.map(v => v.title), ['A', 'B', '合并', '独立']);
+  assert.equal(projected.doc.occurrences[0].body, '补充');
+  assert.equal(projected.doc.relations.filter(e => e.from === id('A') && e.to === id('合并')).length, 1);
+  const layout = lanes(projected.doc);
+  assert.deepEqual(layout.rows[0].missing, ['尚未定义']);
+  assert.deepEqual(layout.rows[2].returns, [2]);
+  assert.equal(api.projectThoughtNodes(doc, 1).sourceIndices[0], 1);
+});
+
+test('long reverse-ordered thoughts place every parent before its successor without changing records', () => {
+  const count = 1200;
+  const doc = parse(Array.from({ length: count }, (_, i) => {
+    const n = count - i - 1;
+    return `- 节点${n}\n${n + 1 < count ? `  → 节点${n + 1}\n` : ''}`;
+  }).join('\n'));
+  const projection = api.projectThoughtNodes(doc);
+  assert.deepEqual(projection.doc.occurrences.map(v => v.title), Array.from({ length: count }, (_, i) => `节点${i}`));
+  assert.equal(projection.doc.relations.length, count - 1);
+  assert.equal(doc.occurrences[0].title, `节点${count - 1}`);
+});

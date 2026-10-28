@@ -119,6 +119,14 @@ export async function readThoughtNode(app: App, key: string, ordinal?: number) {
   return { file, occurrences: node.occurrences, node: { ...node, body: visit.body, start: visit.start,
     ordinal: visit.ordinal, revision: nodeRevision(node) } };
 }
+
+/** Resolve a visible reference for editing without navigating away from the graph. */
+export async function readThoughtOccurrence(app: App, owner: string, visit: ThoughtDocument["occurrences"][number]) {
+  const key = visit.target
+    ? (await resolveTarget(app, owner, visit.target, visit.referenceLabel, undefined, visit.referenceLabel !== undefined)).key
+    : nodeKey(owner, visit.id);
+  return { key, ...await readThoughtNode(app, key, visit.target ? undefined : visit.ordinal) };
+}
 function graphEntry(owner: string, node: Pick<GraphNode, "path" | "label" | "ownerPath">, markdown: string) {
   const ref = splitNodeKey(node.path);
   if (ref?.file === owner || node.ownerPath === owner) {

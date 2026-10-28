@@ -115,3 +115,18 @@
 .workspace-leaf-content .brainos-lanes-tracks circle.is-active { stroke-width: 5px; stroke: color-mix(in srgb, var(--interactive-accent) 25%, var(--background-primary)); r: 6px; }
 .workspace-leaf-content .brainos-lanes-title-input { font: 500 15px/1.7 var(--font-interface); }
 @media (max-width: 480px) { .workspace-leaf-content .brainos-lane-view { padding: 20px 12px 32px; } }
+
+/* Editing stays in the reading surface, without an extra toolbar or dialog. */
+.brainos-lane-view { container-type: inline-size; }
+.brainos-lanes-row { box-sizing: border-box; scroll-margin-block: 16px; }
+.brainos-lanes-row:hover:not(.is-selected):not(.is-editing) { background: var(--background-modifier-hover); }
+.workspace-leaf-content .brainos-lane-view button.brainos-lanes-node:focus-visible { outline: 2px solid var(--interactive-accent); outline-offset: 5px; border-radius: 3px; text-decoration: none; }
+.brainos-lanes-body-input { display: block; width: 100%; min-height: 90px; margin-top: 10px; padding: 0; border: 0; border-radius: 0; background: transparent; box-shadow: none; color: var(--text-normal); font: inherit; line-height: 1.85; resize: vertical; }
+.brainos-lanes-body-input:focus { box-shadow: none; }
+.workspace-leaf-content .brainos-lanes-title-input:focus,
+.workspace-leaf-content .brainos-lanes-body-input:focus { box-shadow: none; outline: none; background: transparent; }
+@container (max-width: 420px) {
+  .brainos-lanes-heading { padding-right: 0; }
+  .brainos-lanes-add { position: static; margin-top: 12px; }
+  .brainos-lanes-row { padding-right: 8px; }
+}

@@ -58,6 +58,8 @@ Type a node title to see matching nodes from the thought folder. Choose an exist
 
 In the lane view, Tab extends the focused node, Enter starts a sibling branch from its predecessor, and Space edits the title in place. Up/down select the previous/next visible row, just like a Git log. Branch lines describe relationships only; there is no left/right navigation. Moving selection does not enter title editing. While typing, Enter saves, Tab saves and continues, and Escape cancels. IME composition does not submit a node. Raw round trips preserve the selected occurrence and scroll position. The canvas gestures in the table above remain available in Global graph.
 
+An empty thought accepts Tab or Enter to start its first node. Saving and cancelling return focus to the thought, so you can create, extend and rename without reaching for the mouse. Space edits the title and body directly on the current graph, including referenced nodes. Enter in the title saves; Down enters the body, where Enter inserts a line and Command/Ctrl+Enter saves. Escape cancels. Editing adds no operation toolbar or Confirm/Cancel buttons. Sibling creation follows the selected record's actual arrival even when the graph merges several parents.
+
 ## Markdown format
 
 ```md

@@ -947,6 +947,10 @@ async function readThoughtNode(app, key, ordinal) {
     revision: nodeRevision(node)
   } };
 }
+async function readThoughtOccurrence(app, owner, visit) {
+  const key = visit.target ? (await resolveTarget(app, owner, visit.target, visit.referenceLabel, void 0, visit.referenceLabel !== void 0)).key : nodeKey(owner, visit.id);
+  return { key, ...await readThoughtNode(app, key, visit.target ? void 0 : visit.ordinal) };
+}
 function graphEntry(owner, node, markdown) {
   const ref = splitNodeKey(node.path);
   if ((ref == null ? void 0 : ref.file) === owner || node.ownerPath === owner) {
@@ -2448,40 +2452,72 @@ var import_obsidian6 = require("obsidian");
 
 // src/thought-lanes.ts
 function projectThoughtNodes(doc, preferredIndex = -1) {
-  var _a;
+  var _a, _b, _c;
   const ids = [...new Set(doc.occurrences.map((v) => v.id))];
   const remaining = new Set(ids), order = [];
+  const incoming = new Map(ids.map((id) => [id, 0]));
+  const outgoing2 = /* @__PURE__ */ new Map();
+  const latest = /* @__PURE__ */ new Map();
+  doc.occurrences.forEach((visit, index) => latest.set(visit.id, index));
+  for (const edge of doc.relations) {
+    if (edge.from === edge.to || !remaining.has(edge.from) || !remaining.has(edge.to)) continue;
+    incoming.set(edge.to, incoming.get(edge.to) + 1);
+    const targets = (_a = outgoing2.get(edge.from)) != null ? _a : [];
+    targets.push(edge.to);
+    outgoing2.set(edge.from, targets);
+  }
   while (remaining.size) {
-    const next = (_a = ids.find((id) => remaining.has(id) && !doc.relations.some((e) => e.to === id && e.from !== id && remaining.has(e.from)))) != null ? _a : ids.find((id) => remaining.has(id));
+    const next = (_b = ids.find((id) => remaining.has(id) && incoming.get(id) === 0)) != null ? _b : ids.find((id) => remaining.has(id));
     order.push(next);
     remaining.delete(next);
+    for (const target of (_c = outgoing2.get(next)) != null ? _c : []) incoming.set(target, incoming.get(target) - 1);
   }
   const sourceIndices = order.map((id) => {
     var _a2;
-    return ((_a2 = doc.occurrences[preferredIndex]) == null ? void 0 : _a2.id) === id ? preferredIndex : doc.occurrences.reduce((found, visit, index) => visit.id === id ? index : found, -1);
+    return ((_a2 = doc.occurrences[preferredIndex]) == null ? void 0 : _a2.id) === id ? preferredIndex : latest.get(id);
   });
   const occurrences = sourceIndices.map((index) => doc.occurrences[index]);
+  const rowIndices = new Map(order.map((id, index) => [id, index]));
   const seen = /* @__PURE__ */ new Set();
   const relations = doc.relations.filter((edge) => {
     const key = JSON.stringify([edge.from, edge.to]);
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
-  }).map((edge) => ({ ...edge, sourceIndex: order.indexOf(edge.from) }));
+  }).map((edge) => {
+    var _a2;
+    return { ...edge, sourceIndex: (_a2 = rowIndices.get(edge.from)) != null ? _a2 : -1 };
+  });
   return { doc: { ...doc, occurrences, relations, paths: [] }, sourceIndices };
 }
 function buildThoughtLanes(doc) {
-  var _a, _b, _c;
+  var _a, _b, _c, _d, _e;
   const rows = doc.occurrences.map(() => ({ lane: 0, returns: [], missing: [] }));
   const edges = [], first = /* @__PURE__ */ new Map();
   const occupied = /* @__PURE__ */ new Map();
   const incoming = /* @__PURE__ */ new Map();
+  const relationsByRow = /* @__PURE__ */ new Map();
+  for (const relation of doc.relations) {
+    if (relation.sourceIndex === void 0) continue;
+    const relations = (_a = relationsByRow.get(relation.sourceIndex)) != null ? _a : [];
+    relations.push(relation);
+    relationsByRow.set(relation.sourceIndex, relations);
+  }
+  const nextVisit = /* @__PURE__ */ new Map();
+  const targetsByRow = [];
+  for (let index = rows.length - 1; index >= 0; index--) {
+    targetsByRow[index] = ((_b = relationsByRow.get(index)) != null ? _b : []).map((relation) => {
+      var _a2;
+      return { relation, target: (_a2 = nextVisit.get(relation.to)) != null ? _a2 : -1 };
+    });
+    nextVisit.set(doc.occurrences[index].id, index);
+  }
   let laneCount = 1;
   for (let index = 0; index < rows.length; index++) {
     const row = rows[index], visit = doc.occurrences[index];
     row.revisit = first.get(visit.id);
     if (row.revisit === void 0) first.set(visit.id, index);
-    const parents = (_a = incoming.get(index)) != null ? _a : [];
+    const parents = (_c = incoming.get(index)) != null ? _c : [];
     const freeLane = () => {
       var _a2;
       let lane = 0;
@@ -2491,26 +2527,33 @@ function buildThoughtLanes(doc) {
     row.lane = parents.length ? Math.min(...parents.map((e) => e.lane)) : freeLane();
     for (const edge of parents) if (occupied.get(edge.lane) === index) occupied.delete(edge.lane);
     const seen = /* @__PURE__ */ new Set();
-    for (const relation of doc.relations.filter((e) => e.sourceIndex === index)) {
+    for (const { relation, target } of targetsByRow[index]) {
       if (seen.has(relation.to)) continue;
       seen.add(relation.to);
-      const target = doc.occurrences.findIndex((v, i) => i > index && v.id === relation.to);
       if (target < 0) {
         const previous = first.get(relation.to);
         if (previous !== void 0) row.returns.push(previous);
-        else row.missing.push((_b = relation.targetText) != null ? _b : relation.to);
+        else row.missing.push((_d = relation.targetText) != null ? _d : relation.to);
         continue;
       }
       const lane = !occupied.has(row.lane) ? row.lane : freeLane();
       occupied.set(lane, target);
       const edge = { from: index, to: target, lane };
       edges.push(edge);
-      incoming.set(target, [...(_c = incoming.get(target)) != null ? _c : [], edge]);
+      incoming.set(target, [...(_e = incoming.get(target)) != null ? _e : [], edge]);
       laneCount = Math.max(laneCount, lane + 1);
     }
     laneCount = Math.max(laneCount, row.lane + 1);
   }
   return { rows, edges, laneCount };
+}
+function thoughtLaneParent(doc, index) {
+  var _a;
+  const visit = doc.occurrences[index];
+  if (!visit) return void 0;
+  const incoming = doc.relations.filter((edge) => edge.to === visit.id && edge.sourceIndex !== void 0 && doc.occurrences.findIndex((record, i) => i > edge.sourceIndex && record.id === visit.id) === index);
+  const sourceIndex = (_a = incoming[incoming.length - 1]) == null ? void 0 : _a.sourceIndex;
+  return sourceIndex === void 0 ? void 0 : doc.occurrences[sourceIndex];
 }
 function navigateThoughtLanes(layout, index, direction2) {
   if (!layout.rows[index]) return index;
@@ -2520,12 +2563,14 @@ function navigateThoughtLanes(layout, index, direction2) {
 }
 
 // src/thought-lane-view.ts
+var nextLaneViewID = 0;
 var ThoughtLaneView = class extends import_obsidian6.Component {
   constructor(app, container, actions) {
     super();
     this.app = app;
     this.container = container;
     this.actions = actions;
+    __publicField(this, "viewID", ++nextLaneViewID);
     __publicField(this, "file");
     __publicField(this, "doc");
     __publicField(this, "markdown", "");
@@ -2541,6 +2586,17 @@ var ThoughtLaneView = class extends import_obsidian6.Component {
   }
   onload() {
     this.container.tabIndex = -1;
+    this.registerDomEvent(this.container, "keydown", (event) => {
+      if (event.target !== this.container || this.draft || this.busy || event.isComposing || event.repeat || event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return;
+      if (event.key === "Tab" || event.key === "Enter") {
+        event.preventDefault();
+        event.stopPropagation();
+        this.edit();
+      } else if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+        event.preventDefault();
+        this.focusSelected();
+      }
+    });
     this.registerDomEvent(this.container, "keydown", (event) => {
       var _a;
       if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== "z" || event.isComposing || event.repeat) return;
@@ -2626,14 +2682,18 @@ var ThoughtLaneView = class extends import_obsidian6.Component {
     const heading = this.container.createDiv({ cls: "brainos-lanes-heading" });
     heading.createEl("h2", { text: file.basename });
     heading.createDiv({ cls: "brainos-lanes-caption", text: `${this.doc.nodes.length} \u4E2A\u8282\u70B9 \xB7 ${this.doc.occurrences.length} \u6B21\u8BB0\u5F55 \xB7 \u81EA\u4E0A\u800C\u4E0B\u9605\u8BFB` });
-    const add = heading.createEl("button", { text: "\u65B0\u60F3\u6CD5", cls: "brainos-lanes-add" });
-    add.onclick = () => this.edit();
+    if (!this.doc.occurrences.length) {
+      const add = heading.createEl("button", { text: "\u65B0\u60F3\u6CD5", cls: "brainos-lanes-add" });
+      add.onclick = () => {
+        void this.edit();
+      };
+    }
     if (!doc.occurrences.length) {
       this.container.createDiv({ cls: "brainos-lanes-empty", text: "\u4ECE\u4E00\u4E2A\u60F3\u6CD5\u5F00\u59CB\u3002\u521B\u5EFA\u8282\u70B9\u540E\uFF0C\u53EF\u4EE5\u7EE7\u7EED\u5EF6\u4F38\u6216\u53E6\u5F00\u5206\u652F\u3002" });
       return;
     }
     const layout = buildThoughtLanes(doc);
-    const trackWidth = Math.max(104, Math.min(156, 48 + layout.laneCount * 24));
+    const trackWidth = Math.max(72, Math.min(156, 48 + layout.laneCount * 24));
     const reading = this.container.createDiv({ cls: "brainos-lanes-reading" });
     reading.style.setProperty("--brainos-track-width", trackWidth + "px");
     const svg = this.container.doc.createElementNS("http://www.w3.org/2000/svg", "svg");
@@ -2655,10 +2715,11 @@ var ThoughtLaneView = class extends import_obsidian6.Component {
       const index = projection.sourceIndices[rowIndex];
       const row = reading.createEl("article", { cls: "brainos-lanes-row" });
       row.toggleClass("is-selected", index === this.selected);
+      row.toggleClass("is-editing", (draft == null ? void 0 : draft.index) === index);
       const button = row.createEl("button", {
         cls: "brainos-lanes-node",
         text: visit.title,
-        attr: { "data-visit": String(index), "aria-expanded": String(index === this.selected) }
+        attr: { "data-visit": String(index), "aria-label": visit.title, "aria-expanded": String(index === this.selected) }
       });
       if ((draft == null ? void 0 : draft.index) === index) {
         button.hidden = true;
@@ -2689,10 +2750,8 @@ var ThoughtLaneView = class extends import_obsidian6.Component {
           this.selected = index;
           if (event.key === "Tab") this.edit(void 0, visit);
           else if (event.key === "Enter") {
-            const incoming = layout.edges.filter((e) => e.to === rowIndex), parent = incoming[incoming.length - 1];
-            this.edit(void 0, parent ? doc.occurrences[parent.from] : void 0, true);
-          } else if (visit.target) this.raw();
-          else this.edit(visit);
+            this.edit(void 0, thoughtLaneParent(this.doc, index), true);
+          } else void this.edit(visit);
         } else if (event.key === "Escape") {
           event.preventDefault();
           this.selected = -1;
@@ -2709,14 +2768,16 @@ var ThoughtLaneView = class extends import_obsidian6.Component {
         const menu = new import_obsidian6.Menu();
         menu.addItem((item) => item.setTitle("\u7EE7\u7EED\u601D\u8003 \xB7 Tab").onClick(() => this.edit(void 0, visit)));
         menu.addItem((item) => item.setTitle("\u4ECE\u8FD9\u91CC\u53E6\u5F00\u5206\u652F").onClick(() => this.edit(void 0, visit, true)));
-        menu.addItem((item) => item.setTitle("\u7F16\u8F91\u6807\u9898 \xB7 Space").onClick(() => visit.target ? this.raw() : this.edit(visit)));
+        menu.addItem((item) => item.setTitle("\u7F16\u8F91\u8282\u70B9 \xB7 Space").onClick(() => {
+          void this.edit(visit);
+        }));
         menu.addItem((item) => item.setTitle("\u67E5\u770B Raw").onClick(() => this.raw()));
         menu.addItem((item) => item.setTitle("\u5220\u9664\u8282\u70B9 \xB7 Backspace / Delete").onClick(() => {
           void this.deleteNode(visit.id);
         }));
         menu.showAtMouseEvent(event);
       };
-      if ((draft == null ? void 0 : draft.index) === index && !draft.visit) continue;
+      if ((draft == null ? void 0 : draft.index) === index) continue;
       const meta = row.createDiv({ cls: "brainos-lanes-meta" });
       const previous = layout.rows[rowIndex].revisit;
       if (previous !== void 0) {
@@ -2724,7 +2785,7 @@ var ThoughtLaneView = class extends import_obsidian6.Component {
         back.onclick = () => jump(previous);
       } else {
         const incoming = layout.edges.filter((edge) => edge.to === rowIndex).length;
-        meta.setText(incoming > 1 ? `\u6C47\u5408 \xB7 ${incoming} \u6761\u8DEF\u5F84` : index === 0 ? "\u8D77\u70B9" : "");
+        meta.setText(incoming > 1 ? `\u6C47\u5408 \xB7 ${incoming} \u6761\u8DEF\u5F84` : incoming === 0 ? "\u8D77\u70B9" : "");
       }
       for (const target of layout.rows[rowIndex].returns) {
         const back = meta.createEl("button", { text: "\u21A9 \u56DE\u5230\u300C" + doc.occurrences[target].title + "\u300D", cls: "brainos-lanes-link" });
@@ -2733,7 +2794,16 @@ var ThoughtLaneView = class extends import_obsidian6.Component {
       for (const target of layout.rows[rowIndex].missing) meta.createSpan({ text: "\u2192 " + target + "\uFF08\u5C1A\u65E0\u672C\u5730\u8BB0\u5F55\uFF09" });
       if (this.selected !== index) continue;
       const details = row.createDiv({ cls: "brainos-lanes-details" });
-      const records = (_e = (_d = (_c = this.doc) == null ? void 0 : _c.nodes.find((node) => node.id === visit.id)) == null ? void 0 : _d.occurrences) != null ? _e : [visit];
+      details.id = `brainos-lane-${this.viewID}-details-${index}`;
+      button.setAttribute("aria-controls", details.id);
+      let records = (_e = (_d = (_c = this.doc) == null ? void 0 : _c.nodes.find((node) => node.id === visit.id)) == null ? void 0 : _d.occurrences) != null ? _e : [visit];
+      if (visit.target) {
+        try {
+          records = (await readThoughtOccurrence(this.app, file.path, visit)).occurrences;
+        } catch (e) {
+        }
+        if (revision !== this.revision) return;
+      }
       for (const record of records.filter((record2) => record2.body)) {
         const body = details.createDiv({ cls: "brainos-lanes-body" });
         if (records.filter((record2) => record2.body).length > 1) body.createDiv({ cls: "brainos-lanes-caption", text: `\u8BB0\u5F55 ${record.ordinal + 1}` });
@@ -2779,17 +2849,42 @@ var ThoughtLaneView = class extends import_obsidian6.Component {
     this.container.scrollTop = top;
     if (hadFocus && !draft) this.focusSelected();
   }
-  edit(visit, parent, branch = false) {
+  async edit(visit, parent, branch = false) {
     var _a, _b;
     if (!this.doc || this.busy) return;
     if (this.draft) {
       (_a = this.container.querySelector(".brainos-lanes-title-input")) == null ? void 0 : _a.focus();
       return;
     }
-    const node = visit && this.doc.nodes.find((n) => n.id === visit.id);
-    const expected = visit && node ? { title: node.title, body: visit.body, ordinal: visit.ordinal, revision: nodeRevision(node) } : void 0;
+    const file = this.file;
+    if (!file) return;
+    let loaded;
+    if (visit) {
+      this.busy = true;
+      try {
+        loaded = await readThoughtOccurrence(this.app, file.path, visit);
+      } catch (error) {
+        new import_obsidian6.Notice(error instanceof Error ? error.message : String(error));
+        return;
+      } finally {
+        this.busy = false;
+      }
+      if (this.file !== file) return;
+    }
+    const node = loaded == null ? void 0 : loaded.node;
+    const expected = node ? { title: node.title, body: node.body, ordinal: node.ordinal, revision: node.revision } : void 0;
     const previousSelection = this.selected;
-    this.draft = { visit, parent, branch, value: (_b = visit == null ? void 0 : visit.title) != null ? _b : "", expected, index: visit ? this.doc.occurrences.indexOf(visit) : -1, previousSelection };
+    this.draft = {
+      visit,
+      parent,
+      branch,
+      value: (_b = node == null ? void 0 : node.title) != null ? _b : "",
+      body: node == null ? void 0 : node.body,
+      editKey: loaded == null ? void 0 : loaded.key,
+      expected,
+      index: visit ? this.doc.occurrences.indexOf(visit) : -1,
+      previousSelection
+    };
     if (visit) this.selected = this.draft.index;
     void this.render().then(() => {
       const input = this.container.querySelector(".brainos-lanes-title-input");
@@ -2803,13 +2898,46 @@ var ThoughtLaneView = class extends import_obsidian6.Component {
     });
   }
   renderInput(row, draft) {
+    var _a, _b;
     const input = row.createEl("input", {
       cls: "brainos-lanes-title-input",
       type: "text",
       value: draft.value,
       attr: { "aria-label": draft.visit ? "\u7F16\u8F91\u8282\u70B9\u540D\u79F0" : "\u65B0\u8282\u70B9\u540D\u79F0", placeholder: "\u8F93\u5165\u8282\u70B9\u540D\u79F0\u2026", autocomplete: "off" }
     });
-    row.createDiv({ cls: "brainos-lanes-input-hint", text: "Enter \u786E\u8BA4 \xB7 Tab \u786E\u8BA4\u5E76\u7EE7\u7EED \xB7 Esc \u53D6\u6D88" });
+    const cancelDraft = () => {
+      if (this.busy) return;
+      this.selected = draft.previousSelection;
+      this.draft = void 0;
+      void this.render().then(() => this.focusSelected());
+    };
+    const body = draft.visit ? row.createEl("textarea", {
+      cls: "brainos-lanes-body-input",
+      value: (_a = draft.body) != null ? _a : "",
+      attr: { "aria-label": "\u7F16\u8F91\u8282\u70B9\u6B63\u6587", placeholder: "\u8865\u5145\u60F3\u6CD5\u2026", rows: "3" }
+    }) : void 0;
+    if (body) {
+      body.oninput = () => {
+        draft.body = body.value;
+      };
+      body.onkeydown = (event) => {
+        event.stopPropagation();
+        if (event.isComposing || event.keyCode === 229 || event.repeat) return;
+        if (event.key === "Escape") {
+          event.preventDefault();
+          cancelDraft();
+        } else if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+          event.preventDefault();
+          if (draft.value.trim()) void this.saveDraft(false);
+        } else if (event.key === "Tab" && !event.shiftKey) {
+          event.preventDefault();
+          if (draft.value.trim()) void this.saveDraft(true);
+        } else if (event.key === "ArrowUp" && body.selectionStart === 0 && body.selectionEnd === 0) {
+          event.preventDefault();
+          input.focus();
+        }
+      };
+    }
     let composing = false;
     input.addEventListener("compositionstart", () => {
       composing = true;
@@ -2818,7 +2946,7 @@ var ThoughtLaneView = class extends import_obsidian6.Component {
       composing = false;
       draft.value = input.value;
     });
-    this.titleSuggest = new NodeTitleSuggest(
+    if (!((_b = draft.visit) == null ? void 0 : _b.target)) this.titleSuggest = new NodeTitleSuggest(
       this.app,
       input,
       this.file.path,
@@ -2838,16 +2966,17 @@ var ThoughtLaneView = class extends import_obsidian6.Component {
       draft.candidate = void 0;
     };
     input.onkeydown = (event) => {
-      var _a;
+      var _a2;
       if (event.defaultPrevented) return;
-      if (((_a = this.titleSuggest) == null ? void 0 : _a.isShowing) && ["ArrowUp", "ArrowDown", "Enter", "Escape"].includes(event.key)) return;
+      if (((_a2 = this.titleSuggest) == null ? void 0 : _a2.isShowing) && ["ArrowUp", "ArrowDown", "Enter", "Escape"].includes(event.key)) return;
       event.stopPropagation();
       if (composing || event.isComposing || event.keyCode === 229 || event.repeat) return;
-      if (event.key === "Escape") {
+      if (event.key === "ArrowDown" && body) {
         event.preventDefault();
-        this.selected = draft.previousSelection;
-        this.draft = void 0;
-        void this.render().then(() => this.focusSelected());
+        body.focus();
+      } else if (event.key === "Escape") {
+        event.preventDefault();
+        cancelDraft();
       } else if (event.key === "Enter" || event.key === "Tab" && !event.shiftKey) {
         event.preventDefault();
         draft.value = input.value;
@@ -2867,8 +2996,9 @@ var ThoughtLaneView = class extends import_obsidian6.Component {
     let saved = false;
     try {
       await graphHistory(this.app).record(async () => {
+        var _a2;
         if (candidate) await readThoughtNode(this.app, candidate.node.path);
-        if (draft.visit) await editThoughtNode(this.app, nodeKey(file.path, draft.visit.id), draft.value, void 0, draft.expected, (candidate == null ? void 0 : candidate.kind) === "reuse");
+        if (draft.visit) await editThoughtNode(this.app, (_a2 = draft.editKey) != null ? _a2 : nodeKey(file.path, draft.visit.id), draft.value, draft.body, draft.expected, (candidate == null ? void 0 : candidate.kind) === "reuse");
         else await processGraphFile(this.app, file, (text) => {
           if (draft.parent && !parseThoughtDocument(text).nodes.some((n) => n.id === draft.parent.id)) throw new Error("\u8D77\u70B9\u5DF2\u4E0D\u5B58\u5728\uFF0C\u8BF7\u5237\u65B0\u540E\u91CD\u8BD5");
           const from = draft.parent && occurrenceTitle(draft.parent);
