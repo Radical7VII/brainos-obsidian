@@ -130,3 +130,11 @@
   .brainos-lanes-add { position: static; margin-top: 12px; }
   .brainos-lanes-row { padding-right: 8px; }
 }
+
+/* References keep their place in the path; provenance wraps beneath the title. */
+.brainos-lanes-origin { color: var(--text-accent); }
+.brainos-lanes-source { border-left: 2px solid var(--interactive-accent); padding: 2px 0 2px 12px; margin-bottom: 12px; }
+.brainos-lanes-reference-error { color: var(--text-muted); font-size: var(--font-ui-small); }
+.brainos-lanes-row.is-reference .brainos-lanes-node::after { content: " ↗"; color: var(--text-accent); font-size: .85em; }
+.brainos-lanes-connections { margin-top: 10px; }
+.brainos-lanes-link:focus-visible { outline: 2px solid var(--interactive-accent); outline-offset: 3px; border-radius: 3px; }

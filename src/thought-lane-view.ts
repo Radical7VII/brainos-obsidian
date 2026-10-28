@@ -143,6 +143,7 @@ export class ThoughtLaneView extends Component {
       const row = reading.createEl("article", { cls: "brainos-lanes-row" });
       row.toggleClass("is-selected", index === this.selected);
       row.toggleClass("is-editing", draft?.index === index);
+      row.toggleClass("is-reference", !!visit.target);
       const button = row.createEl("button", { cls: "brainos-lanes-node", text: visit.title,
         attr: { "data-visit": String(index), "aria-label": visit.title, "aria-expanded": String(index === this.selected) } });
       if (draft?.index === index) {
@@ -173,19 +174,20 @@ export class ThoughtLaneView extends Component {
         const menu = new Menu();
         menu.addItem(item => item.setTitle("继续思考 · Tab").onClick(() => this.edit(undefined, visit)));
         menu.addItem(item => item.setTitle("从这里另开分支").onClick(() => this.edit(undefined, visit, true)));
-        menu.addItem(item => item.setTitle("编辑节点 · Space").onClick(() => { void this.edit(visit); }));
+        menu.addItem(item => item.setTitle(visit.target ? "编辑来源节点 · Space" : "编辑节点 · Space").onClick(() => { void this.edit(visit); }));
         menu.addItem(item => item.setTitle("查看 Raw").onClick(() => this.raw()));
-        menu.addItem(item => item.setTitle("删除节点 · Backspace / Delete").onClick(() => { void this.deleteNode(visit.id); }));
+        menu.addItem(item => item.setTitle(visit.target ? "移除当前引用 · Backspace / Delete" : "删除节点 · Backspace / Delete").onClick(() => { void this.deleteNode(visit.id); }));
         menu.showAtMouseEvent(event);
       };
       if (draft?.index === index) continue;
       const meta = row.createDiv({ cls: "brainos-lanes-meta" });
+      if (visit.target) meta.createSpan({ cls: "brainos-lanes-origin", text: "↗ 引用 · " + (visit.target.split("#")[0] || file.path).replace(/\.md$/, "") });
       const previous = layout.rows[rowIndex].revisit;
       if (previous !== undefined) {
         const back = meta.createEl("button", { text: "↩ 再次经过 · 查看首次记录", cls: "brainos-lanes-link" }); back.onclick = () => jump(previous);
       } else {
         const incoming = layout.edges.filter(edge => edge.to === rowIndex).length;
-        meta.setText(incoming > 1 ? `汇合 · ${incoming} 条路径` : incoming === 0 ? "起点" : "");
+        meta.createSpan({ text: incoming > 1 ? `汇合 · ${incoming} 条路径` : incoming === 0 ? "起点" : "" });
       }
       for (const target of layout.rows[rowIndex].returns) {
         const back = meta.createEl("button", { text: "↩ 回到「" + doc.occurrences[target].title + "」", cls: "brainos-lanes-link" }); back.onclick = () => jump(target);
@@ -195,18 +197,40 @@ export class ThoughtLaneView extends Component {
       const details = row.createDiv({ cls: "brainos-lanes-details" });
       details.id = `brainos-lane-${this.viewID}-details-${index}`;
       button.setAttribute("aria-controls", details.id);
-      let records = this.doc?.nodes.find(node => node.id === visit.id)?.occurrences ?? [visit];
+      const localRecords = this.doc?.nodes.find(node => node.id === visit.id)?.occurrences ?? [visit];
+      let records = localRecords;
+      let sourcePath = file.path;
       if (visit.target) {
-        try { records = (await readThoughtOccurrence(this.app, file.path, visit)).occurrences; }
-        catch { /* Keep unresolved references visible and editable without navigating away. */ }
-        if (revision !== this.revision) return;
+        const source = details.createDiv({ cls: "brainos-lanes-source" });
+        try {
+          const resolved = await readThoughtOccurrence(this.app, file.path, visit);
+          if (revision !== this.revision) return;
+          records = resolved.occurrences; sourcePath = resolved.file.path;
+          source.createDiv({ cls: "brainos-lanes-caption", text: "来源 · " + sourcePath + " · 编辑将同步修改来源" });
+          const open = source.createEl("button", { cls: "brainos-lanes-link", text: "↗ 打开来源思考",
+            attr: { "aria-label": "打开来源思考：" + sourcePath } });
+          open.onclick = () => { void this.app.workspace.openLinkText(sourcePath, file.path, true).catch(error => new Notice(String(error))); };
+          if (!records.some(record => record.body)) source.createDiv({ cls: "brainos-lanes-caption", text: "来源想法暂无正文" });
+        } catch {
+          if (revision !== this.revision) return;
+          records = [];
+          source.createDiv({ cls: "brainos-lanes-reference-error", text: "无法读取来源想法。引用仍保留，可检查来源文件或在 Raw 中修正链接。" });
+        }
       }
-      for (const record of records.filter(record => record.body)) {
-        const body = details.createDiv({ cls: "brainos-lanes-body" });
-        if (records.filter(record => record.body).length > 1) body.createDiv({ cls: "brainos-lanes-caption", text: `记录 ${record.ordinal + 1}` });
-        await MarkdownRenderer.render(this.app, record.body, body.createDiv({ cls: "markdown-rendered" }), file.path, component);
-        if (revision !== this.revision) return;
-      }
+      const renderRecords = async (entries: DocumentOccurrence[], owner: string, annotation = false) => {
+        const bodies = entries.filter(record => record.body);
+        for (const record of bodies) {
+          const body = details.createDiv({ cls: "brainos-lanes-body" });
+          if (annotation || bodies.length > 1) body.createDiv({ cls: "brainos-lanes-caption",
+            text: annotation ? "当前思考的补充" : `记录 ${record.ordinal + 1}` });
+          await MarkdownRenderer.render(this.app, record.body, body.createDiv({ cls: "markdown-rendered" }), owner, component);
+          if (revision !== this.revision) return;
+        }
+      };
+      await renderRecords(records, sourcePath);
+      if (revision !== this.revision) return;
+      if (visit.target) await renderRecords(localRecords, file.path, true);
+      if (revision !== this.revision) return;
       const connections = details.createDiv({ cls: "brainos-lanes-connections" });
       for (const edge of layout.edges.filter(e => e.from === rowIndex)) {
         const link = connections.createEl("button", { cls: "brainos-lanes-link", text: "→ " + doc.occurrences[edge.to].title }); link.onclick = () => jump(edge.to);
@@ -268,6 +292,7 @@ export class ThoughtLaneView extends Component {
   private renderInput(row: HTMLElement, draft: LaneDraft) {
     const input = row.createEl("input", { cls: "brainos-lanes-title-input", type: "text", value: draft.value,
       attr: { "aria-label": draft.visit ? "编辑节点名称" : "新节点名称", placeholder: "输入节点名称…", autocomplete: "off" } });
+    if (draft.visit?.target) row.createDiv({ cls: "brainos-lanes-input-hint", text: "正在编辑来源想法，修改会同步到所有引用。" });
     const cancelDraft = () => {
       if (this.busy) return;
       this.selected = draft.previousSelection; this.draft = undefined;

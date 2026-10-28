@@ -27,7 +27,6 @@ export class NodeTitleSuggest extends AbstractInputSuggest<NodeTitleCandidate> {
   async getSuggestions(query: string): Promise<NodeTitleCandidate[]> {
     if (this.disposed) return [];
     const title = query.trim();
-    if (!title && !this.editingKey) return [];
     this.candidates ??= this.loadNodes().catch(() => { this.candidates = undefined; return []; });
     const nodes = await this.candidates;
     if (this.disposed) return [];

@@ -12,8 +12,8 @@ const bundle = await build({
       export class Component { addChild(c) { return c; } removeChild() {} registerDomEvent(el,type,fn) { el.addEventListener(type,fn); } }
       export class Notice { constructor(message) { globalThis.laneNotice=message; } }
       export class Menu {}
-      export class AbstractInputSuggest { constructor() {} close() {} open() {} }
-      export const MarkdownRenderer={render:async (_app,text,el)=>el.setText(text)};
+      export class AbstractInputSuggest { constructor() {} close() {} open() {} setValue() {} }
+      export const MarkdownRenderer={render:async (_app,text,el,owner)=>{ (globalThis.laneRenders??=[]).push({text,owner});el.setText(text); }};
       export const normalizePath=p=>p;
       export const getAllTags=()=>[];
       export const parseLinktext=p=>({path:p,subpath:''});
@@ -54,10 +54,10 @@ async function fixture(text='- A\n  → B\n\n- B\n') {
   const contents=new Map([[file.path,text]]), files=new Map([[file.path,file]]);
   const app={vault:{cachedRead:async f=>contents.get(f.path),read:async f=>contents.get(f.path),getAbstractFileByPath:path=>files.get(path),
     getMarkdownFiles:()=>[...files.values()],process:async(f,edit)=>contents.set(f.path,edit(contents.get(f.path)))},metadataCache:{getFileCache:()=>({}),getFirstLinkpathDest:path=>files.get(path)}};
-  const raw=[];const view=new ThoughtLaneView(app,container,{raw:line=>raw.push(line),changed(){},loadNodes:async()=>[]});
+  const raw=[],nodes=[];const view=new ThoughtLaneView(app,container,{raw:line=>raw.push(line),changed(){},loadNodes:async()=>nodes});
   view.onload(); await view.show(file);
   const button=label=>container.all().find(el=>el.tag==='button'&&el.text===label);
-  return {view,container,contents,file,raw,button,addFile(path,text){const f=new TFile(path);files.set(path,f);contents.set(path,text);return f;}};
+  return {view,container,contents,file,raw,button,nodes,addFile(path,text){const f=new TFile(path);files.set(path,f);contents.set(path,text);return f;}};
 }
 async function settle() { for(let i=0;i<15;i++)await new Promise(resolve=>setImmediate(resolve)); }
 function key(el,key,extra={}) {
@@ -155,4 +155,40 @@ test('Space edits a referenced source on the current graph instead of opening Ra
   assert.match(f.contents.get('来源.md'),/原位更新正文/);
   assert.match(f.contents.get(f.file.path),/\[\[来源.md\|来源节点\]\]/);
   assert.equal(f.raw.length,0);
+});
+
+
+test('normal continuation suggests local and external ideas and directly saves a reference',async()=>{
+  const f=await fixture();f.addFile('其他思考.md','- 外部想法\n  正文\n');
+  f.nodes.push({path:'其他思考.md#brainos='+encodeURIComponent('name:外部想法'),nodeId:'name:外部想法',ownerPath:'其他思考.md',label:'外部想法'},
+    {path:'思考.md#brainos=name:A',nodeId:'name:A',ownerPath:'思考.md',label:'A'});
+  f.button('A').onclick();await settle();
+  assert.equal(f.button('＋ 链接其他思考'),undefined);
+  key(f.button('A'),'Tab');await settle();
+  const suggest=f.view.titleSuggest;
+  assert.equal((await suggest.getSuggestions('')).length,2);
+  const choices=await suggest.getSuggestions('外部');assert.equal(choices.length,1);
+  suggest.selectSuggestion(choices[0],{});await settle();
+  assert.match(f.contents.get(f.file.path),/→ \[\[其他思考.md\|外部想法\]\]/);
+  assert.equal(f.contents.get('其他思考.md'),'- 外部想法\n  正文\n');
+  assert.ok(f.container.all().some(el=>el.classes.has('brainos-lanes-origin')&&el.text.includes('其他思考')));
+});
+
+test('reference preview uses source-relative links and retains local annotations',async()=>{
+  const f=await fixture('- [[目录/来源.md|来源节点]]\n  本地补充\n');
+  f.addFile('目录/来源.md','- 来源节点\n  [[相对链接]]\n');
+  globalThis.laneRenders=[];
+  f.button('来源节点').onclick();await settle();
+  assert.ok(globalThis.laneRenders.some(r=>r.text==='[[相对链接]]'&&r.owner==='目录/来源.md'));
+  assert.ok(globalThis.laneRenders.some(r=>r.text==='本地补充'&&r.owner==='思考.md'));
+  assert.ok(f.button('↗ 打开来源思考'));
+});
+
+test('broken reference stays visible and removable without changing source files',async()=>{
+  const f=await fixture('- [[不存在.md|失效想法]]\n  保留补充\n');
+  f.button('失效想法').onclick();await settle();
+  assert.ok(f.container.querySelector('.brainos-lanes-reference-error'));
+  assert.ok(f.container.all().some(el=>el.text==='保留补充'));
+  key(f.button('失效想法'),'Delete');await settle();
+  assert.doesNotMatch(f.contents.get(f.file.path),/不存在/);
 });

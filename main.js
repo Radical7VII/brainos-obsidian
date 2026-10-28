@@ -2136,7 +2136,6 @@ var NodeTitleSuggest = class extends import_obsidian5.AbstractInputSuggest {
     var _a;
     if (this.disposed) return [];
     const title = query.trim();
-    if (!title && !this.editingKey) return [];
     (_a = this.candidates) != null ? _a : this.candidates = this.loadNodes().catch(() => {
       this.candidates = void 0;
       return [];
@@ -2716,6 +2715,7 @@ var ThoughtLaneView = class extends import_obsidian6.Component {
       const row = reading.createEl("article", { cls: "brainos-lanes-row" });
       row.toggleClass("is-selected", index === this.selected);
       row.toggleClass("is-editing", (draft == null ? void 0 : draft.index) === index);
+      row.toggleClass("is-reference", !!visit.target);
       const button = row.createEl("button", {
         cls: "brainos-lanes-node",
         text: visit.title,
@@ -2768,24 +2768,25 @@ var ThoughtLaneView = class extends import_obsidian6.Component {
         const menu = new import_obsidian6.Menu();
         menu.addItem((item) => item.setTitle("\u7EE7\u7EED\u601D\u8003 \xB7 Tab").onClick(() => this.edit(void 0, visit)));
         menu.addItem((item) => item.setTitle("\u4ECE\u8FD9\u91CC\u53E6\u5F00\u5206\u652F").onClick(() => this.edit(void 0, visit, true)));
-        menu.addItem((item) => item.setTitle("\u7F16\u8F91\u8282\u70B9 \xB7 Space").onClick(() => {
+        menu.addItem((item) => item.setTitle(visit.target ? "\u7F16\u8F91\u6765\u6E90\u8282\u70B9 \xB7 Space" : "\u7F16\u8F91\u8282\u70B9 \xB7 Space").onClick(() => {
           void this.edit(visit);
         }));
         menu.addItem((item) => item.setTitle("\u67E5\u770B Raw").onClick(() => this.raw()));
-        menu.addItem((item) => item.setTitle("\u5220\u9664\u8282\u70B9 \xB7 Backspace / Delete").onClick(() => {
+        menu.addItem((item) => item.setTitle(visit.target ? "\u79FB\u9664\u5F53\u524D\u5F15\u7528 \xB7 Backspace / Delete" : "\u5220\u9664\u8282\u70B9 \xB7 Backspace / Delete").onClick(() => {
           void this.deleteNode(visit.id);
         }));
         menu.showAtMouseEvent(event);
       };
       if ((draft == null ? void 0 : draft.index) === index) continue;
       const meta = row.createDiv({ cls: "brainos-lanes-meta" });
+      if (visit.target) meta.createSpan({ cls: "brainos-lanes-origin", text: "\u2197 \u5F15\u7528 \xB7 " + (visit.target.split("#")[0] || file.path).replace(/\.md$/, "") });
       const previous = layout.rows[rowIndex].revisit;
       if (previous !== void 0) {
         const back = meta.createEl("button", { text: "\u21A9 \u518D\u6B21\u7ECF\u8FC7 \xB7 \u67E5\u770B\u9996\u6B21\u8BB0\u5F55", cls: "brainos-lanes-link" });
         back.onclick = () => jump(previous);
       } else {
         const incoming = layout.edges.filter((edge) => edge.to === rowIndex).length;
-        meta.setText(incoming > 1 ? `\u6C47\u5408 \xB7 ${incoming} \u6761\u8DEF\u5F84` : incoming === 0 ? "\u8D77\u70B9" : "");
+        meta.createSpan({ text: incoming > 1 ? `\u6C47\u5408 \xB7 ${incoming} \u6761\u8DEF\u5F84` : incoming === 0 ? "\u8D77\u70B9" : "" });
       }
       for (const target of layout.rows[rowIndex].returns) {
         const back = meta.createEl("button", { text: "\u21A9 \u56DE\u5230\u300C" + doc.occurrences[target].title + "\u300D", cls: "brainos-lanes-link" });
@@ -2796,20 +2797,48 @@ var ThoughtLaneView = class extends import_obsidian6.Component {
       const details = row.createDiv({ cls: "brainos-lanes-details" });
       details.id = `brainos-lane-${this.viewID}-details-${index}`;
       button.setAttribute("aria-controls", details.id);
-      let records = (_e = (_d = (_c = this.doc) == null ? void 0 : _c.nodes.find((node) => node.id === visit.id)) == null ? void 0 : _d.occurrences) != null ? _e : [visit];
+      const localRecords = (_e = (_d = (_c = this.doc) == null ? void 0 : _c.nodes.find((node) => node.id === visit.id)) == null ? void 0 : _d.occurrences) != null ? _e : [visit];
+      let records = localRecords;
+      let sourcePath = file.path;
       if (visit.target) {
+        const source = details.createDiv({ cls: "brainos-lanes-source" });
         try {
-          records = (await readThoughtOccurrence(this.app, file.path, visit)).occurrences;
+          const resolved = await readThoughtOccurrence(this.app, file.path, visit);
+          if (revision !== this.revision) return;
+          records = resolved.occurrences;
+          sourcePath = resolved.file.path;
+          source.createDiv({ cls: "brainos-lanes-caption", text: "\u6765\u6E90 \xB7 " + sourcePath + " \xB7 \u7F16\u8F91\u5C06\u540C\u6B65\u4FEE\u6539\u6765\u6E90" });
+          const open = source.createEl("button", {
+            cls: "brainos-lanes-link",
+            text: "\u2197 \u6253\u5F00\u6765\u6E90\u601D\u8003",
+            attr: { "aria-label": "\u6253\u5F00\u6765\u6E90\u601D\u8003\uFF1A" + sourcePath }
+          });
+          open.onclick = () => {
+            void this.app.workspace.openLinkText(sourcePath, file.path, true).catch((error) => new import_obsidian6.Notice(String(error)));
+          };
+          if (!records.some((record) => record.body)) source.createDiv({ cls: "brainos-lanes-caption", text: "\u6765\u6E90\u60F3\u6CD5\u6682\u65E0\u6B63\u6587" });
         } catch (e) {
+          if (revision !== this.revision) return;
+          records = [];
+          source.createDiv({ cls: "brainos-lanes-reference-error", text: "\u65E0\u6CD5\u8BFB\u53D6\u6765\u6E90\u60F3\u6CD5\u3002\u5F15\u7528\u4ECD\u4FDD\u7559\uFF0C\u53EF\u68C0\u67E5\u6765\u6E90\u6587\u4EF6\u6216\u5728 Raw \u4E2D\u4FEE\u6B63\u94FE\u63A5\u3002" });
         }
-        if (revision !== this.revision) return;
       }
-      for (const record of records.filter((record2) => record2.body)) {
-        const body = details.createDiv({ cls: "brainos-lanes-body" });
-        if (records.filter((record2) => record2.body).length > 1) body.createDiv({ cls: "brainos-lanes-caption", text: `\u8BB0\u5F55 ${record.ordinal + 1}` });
-        await import_obsidian6.MarkdownRenderer.render(this.app, record.body, body.createDiv({ cls: "markdown-rendered" }), file.path, component);
-        if (revision !== this.revision) return;
-      }
+      const renderRecords = async (entries, owner, annotation = false) => {
+        const bodies = entries.filter((record) => record.body);
+        for (const record of bodies) {
+          const body = details.createDiv({ cls: "brainos-lanes-body" });
+          if (annotation || bodies.length > 1) body.createDiv({
+            cls: "brainos-lanes-caption",
+            text: annotation ? "\u5F53\u524D\u601D\u8003\u7684\u8865\u5145" : `\u8BB0\u5F55 ${record.ordinal + 1}`
+          });
+          await import_obsidian6.MarkdownRenderer.render(this.app, record.body, body.createDiv({ cls: "markdown-rendered" }), owner, component);
+          if (revision !== this.revision) return;
+        }
+      };
+      await renderRecords(records, sourcePath);
+      if (revision !== this.revision) return;
+      if (visit.target) await renderRecords(localRecords, file.path, true);
+      if (revision !== this.revision) return;
       const connections = details.createDiv({ cls: "brainos-lanes-connections" });
       for (const edge of layout.edges.filter((e) => e.from === rowIndex)) {
         const link = connections.createEl("button", { cls: "brainos-lanes-link", text: "\u2192 " + doc.occurrences[edge.to].title });
@@ -2898,13 +2927,14 @@ var ThoughtLaneView = class extends import_obsidian6.Component {
     });
   }
   renderInput(row, draft) {
-    var _a, _b;
+    var _a, _b, _c;
     const input = row.createEl("input", {
       cls: "brainos-lanes-title-input",
       type: "text",
       value: draft.value,
       attr: { "aria-label": draft.visit ? "\u7F16\u8F91\u8282\u70B9\u540D\u79F0" : "\u65B0\u8282\u70B9\u540D\u79F0", placeholder: "\u8F93\u5165\u8282\u70B9\u540D\u79F0\u2026", autocomplete: "off" }
     });
+    if ((_a = draft.visit) == null ? void 0 : _a.target) row.createDiv({ cls: "brainos-lanes-input-hint", text: "\u6B63\u5728\u7F16\u8F91\u6765\u6E90\u60F3\u6CD5\uFF0C\u4FEE\u6539\u4F1A\u540C\u6B65\u5230\u6240\u6709\u5F15\u7528\u3002" });
     const cancelDraft = () => {
       if (this.busy) return;
       this.selected = draft.previousSelection;
@@ -2913,7 +2943,7 @@ var ThoughtLaneView = class extends import_obsidian6.Component {
     };
     const body = draft.visit ? row.createEl("textarea", {
       cls: "brainos-lanes-body-input",
-      value: (_a = draft.body) != null ? _a : "",
+      value: (_b = draft.body) != null ? _b : "",
       attr: { "aria-label": "\u7F16\u8F91\u8282\u70B9\u6B63\u6587", placeholder: "\u8865\u5145\u60F3\u6CD5\u2026", rows: "3" }
     }) : void 0;
     if (body) {
@@ -2946,7 +2976,7 @@ var ThoughtLaneView = class extends import_obsidian6.Component {
       composing = false;
       draft.value = input.value;
     });
-    if (!((_b = draft.visit) == null ? void 0 : _b.target)) this.titleSuggest = new NodeTitleSuggest(
+    if (!((_c = draft.visit) == null ? void 0 : _c.target)) this.titleSuggest = new NodeTitleSuggest(
       this.app,
       input,
       this.file.path,
