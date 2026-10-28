@@ -54,6 +54,7 @@ All note processing stays local. No account, telemetry, or network service is re
 - `Enter` 从当前记录的来路另开同级分支；没有来路时新建独立节点。
 - `Space` / `F2` 原位修改标题，保留正文。正文通过 Raw 编辑；继续、分支、删除等操作也可通过节点右键菜单使用。
 - `↑/↓` 按屏幕中的记录顺序选择上一条、下一条，到首尾停止。分支线仅表达关系，没有左右导航；移动选择不会进入标题编辑。
+- `Backspace` / `Delete` 删除选中节点及它的全部记录，随后选择邻近一行；标题输入期间只删除文字。
 - `⌘/Ctrl Z` 撤销，`⌘/Ctrl Shift Z` 重做。
 
 名称输入期间，`Enter` 确认，`Tab` 确认并继续延伸，`Esc` 取消；草稿不落盘，中文输入法选词不会提前提交。不弹出新建或编辑 Modal。

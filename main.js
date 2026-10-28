@@ -2511,6 +2511,7 @@ var ThoughtLaneView = class extends import_obsidian6.Component {
     __publicField(this, "scrollByFile", /* @__PURE__ */ new Map());
   }
   onload() {
+    this.container.tabIndex = -1;
     this.registerDomEvent(this.container, "keydown", (event) => {
       var _a;
       if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== "z" || event.isComposing || event.repeat) return;
@@ -2564,7 +2565,7 @@ var ThoughtLaneView = class extends import_obsidian6.Component {
   }
   focusSelected() {
     var _a;
-    (_a = this.container.querySelector(`[data-visit="${Math.max(0, this.selected)}"]`)) == null ? void 0 : _a.focus({ preventScroll: true });
+    ((_a = this.container.querySelector(`[data-visit="${Math.max(0, this.selected)}"]`)) != null ? _a : this.container).focus({ preventScroll: true });
   }
   async render() {
     var _a, _b, _c, _d;
@@ -2589,6 +2590,7 @@ var ThoughtLaneView = class extends import_obsidian6.Component {
     const component = this.addChild(new import_obsidian6.Component());
     this.bodyComponent = component;
     const top = this.container.scrollTop;
+    const hadFocus = this.container.contains(this.container.doc.activeElement);
     this.container.empty();
     const heading = this.container.createDiv({ cls: "brainos-lanes-heading" });
     heading.createEl("h2", { text: file.basename });
@@ -2645,6 +2647,10 @@ var ThoughtLaneView = class extends import_obsidian6.Component {
           event.preventDefault();
           event.stopPropagation();
           jump(navigateThoughtLanes(layout, rowIndex, event.key));
+        } else if (event.key === "Backspace" || event.key === "Delete") {
+          event.preventDefault();
+          event.stopPropagation();
+          if (!event.repeat && this.selected === index) void this.deleteNode(visit.id);
         } else if (["Tab", "Enter", " ", "F2"].includes(event.key)) {
           event.preventDefault();
           event.stopPropagation();
@@ -2674,8 +2680,8 @@ var ThoughtLaneView = class extends import_obsidian6.Component {
         menu.addItem((item) => item.setTitle("\u4ECE\u8FD9\u91CC\u53E6\u5F00\u5206\u652F").onClick(() => this.edit(void 0, visit, true)));
         menu.addItem((item) => item.setTitle("\u7F16\u8F91\u6807\u9898 \xB7 Space").onClick(() => visit.target ? this.raw() : this.edit(visit)));
         menu.addItem((item) => item.setTitle("\u67E5\u770B Raw").onClick(() => this.raw()));
-        menu.addItem((item) => item.setTitle("\u5220\u9664\u8282\u70B9").onClick(() => {
-          void this.change((text) => removeDocumentNode(text, visit.id));
+        menu.addItem((item) => item.setTitle("\u5220\u9664\u8282\u70B9 \xB7 Backspace / Delete").onClick(() => {
+          void this.deleteNode(visit.id);
         }));
         menu.showAtMouseEvent(event);
       };
@@ -2740,6 +2746,7 @@ var ThoughtLaneView = class extends import_obsidian6.Component {
     if (this.frame !== void 0) this.container.win.cancelAnimationFrame(this.frame);
     this.frame = this.container.win.requestAnimationFrame(draw);
     this.container.scrollTop = top;
+    if (hadFocus && !draft) this.focusSelected();
   }
   edit(visit, parent, branch = false) {
     var _a, _b;
@@ -2839,21 +2846,32 @@ var ThoughtLaneView = class extends import_obsidian6.Component {
       }
     }
   }
-  async change(edit, propagate = false) {
+  async deleteNode(id) {
+    if (!this.doc || this.draft || this.busy) return;
+    const row = projectThoughtNodes(this.doc, this.selected).doc.occurrences.findIndex((visit) => visit.id === id);
+    if (row < 0) return;
+    if (await this.change((text) => {
+      var _a;
+      const next = removeDocumentNode(text, id);
+      const projected = projectThoughtNodes(parseThoughtDocument(next));
+      this.selected = (_a = projected.sourceIndices[Math.min(row, projected.sourceIndices.length - 1)]) != null ? _a : -1;
+      return next;
+    })) this.focusSelected();
+  }
+  async change(edit) {
     if (!this.file || this.busy) return;
     this.busy = true;
     try {
       const file = this.file;
       await graphHistory(this.app).record(() => processGraphFile(this.app, file, (text) => {
-        const next = edit(text);
-        if (propagate) this.selected = parseThoughtDocument(next).occurrences.length - 1;
-        return next;
+        return edit(text);
       }));
       this.actions.changed();
       await this.show(file);
+      return true;
     } catch (error) {
       new import_obsidian6.Notice(error instanceof Error ? error.message : String(error));
-      if (propagate) throw error;
+      return false;
     } finally {
       this.busy = false;
     }

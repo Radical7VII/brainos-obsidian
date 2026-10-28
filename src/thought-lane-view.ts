@@ -27,6 +27,7 @@ export class ThoughtLaneView extends Component {
   constructor(private app: App, readonly container: HTMLElement, private actions: Actions) { super(); }
 
   onload() {
+    this.container.tabIndex = -1;
     this.registerDomEvent(this.container, "keydown", event => {
       if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== "z" || event.isComposing || event.repeat) return;
       const target = event.target as HTMLElement | null;
@@ -69,7 +70,7 @@ export class ThoughtLaneView extends Component {
   }
 
   private focusSelected() {
-    this.container.querySelector<HTMLButtonElement>(`[data-visit="${Math.max(0, this.selected)}"]`)?.focus({ preventScroll: true });
+    (this.container.querySelector<HTMLButtonElement>(`[data-visit="${Math.max(0, this.selected)}"]`) ?? this.container).focus({ preventScroll: true });
   }
 
   private async render() {
@@ -93,6 +94,7 @@ export class ThoughtLaneView extends Component {
     if (this.bodyComponent) this.removeChild(this.bodyComponent);
     const component = this.addChild(new Component()); this.bodyComponent = component;
     const top = this.container.scrollTop;
+    const hadFocus = this.container.contains(this.container.doc.activeElement);
     this.container.empty();
     const heading = this.container.createDiv({ cls: "brainos-lanes-heading" });
     heading.createEl("h2", { text: file.basename });
@@ -135,6 +137,9 @@ export class ThoughtLaneView extends Component {
         if (event.key === "ArrowUp" || event.key === "ArrowDown") {
           event.preventDefault(); event.stopPropagation();
           jump(navigateThoughtLanes(layout, rowIndex, event.key));
+        } else if (event.key === "Backspace" || event.key === "Delete") {
+          event.preventDefault(); event.stopPropagation();
+          if (!event.repeat && this.selected === index) void this.deleteNode(visit.id);
         } else if (["Tab", "Enter", " ", "F2"].includes(event.key)) {
           event.preventDefault(); event.stopPropagation(); if (event.repeat) return;
           this.selected = index;
@@ -153,7 +158,7 @@ export class ThoughtLaneView extends Component {
         menu.addItem(item => item.setTitle("从这里另开分支").onClick(() => this.edit(undefined, visit, true)));
         menu.addItem(item => item.setTitle("编辑标题 · Space").onClick(() => visit.target ? this.raw() : this.edit(visit)));
         menu.addItem(item => item.setTitle("查看 Raw").onClick(() => this.raw()));
-        menu.addItem(item => item.setTitle("删除节点").onClick(() => { void this.change(text => removeDocumentNode(text, visit.id)); }));
+        menu.addItem(item => item.setTitle("删除节点 · Backspace / Delete").onClick(() => { void this.deleteNode(visit.id); }));
         menu.showAtMouseEvent(event);
       };
       if (draft?.index === index && !draft.visit) continue;
@@ -206,6 +211,7 @@ export class ThoughtLaneView extends Component {
     if (this.frame !== undefined) this.container.win.cancelAnimationFrame(this.frame);
     this.frame = this.container.win.requestAnimationFrame(draw);
     this.container.scrollTop = top;
+    if (hadFocus && !draft) this.focusSelected();
   }
 
   private edit(visit?: DocumentOccurrence, parent?: DocumentOccurrence, branch = false) {
@@ -274,19 +280,30 @@ export class ThoughtLaneView extends Component {
     }
   }
 
-  private async change(edit: (text: string) => string, propagate = false) {
+  private async deleteNode(id: string) {
+    if (!this.doc || this.draft || this.busy) return;
+    const row = projectThoughtNodes(this.doc, this.selected).doc.occurrences.findIndex(visit => visit.id === id);
+    if (row < 0) return;
+    if (await this.change(text => {
+      const next = removeDocumentNode(text, id);
+      const projected = projectThoughtNodes(parseThoughtDocument(next));
+      this.selected = projected.sourceIndices[Math.min(row, projected.sourceIndices.length - 1)] ?? -1;
+      return next;
+    })) this.focusSelected();
+  }
+
+  private async change(edit: (text: string) => string) {
     if (!this.file || this.busy) return;
     this.busy = true;
     try {
       const file = this.file;
       await graphHistory(this.app).record(() => processGraphFile(this.app, file, text => {
-        const next = edit(text);
-        if (propagate) this.selected = parseThoughtDocument(next).occurrences.length - 1;
-        return next;
+        return edit(text);
       }));
       this.actions.changed(); await this.show(file);
+      return true;
     }
-    catch (error) { new Notice(error instanceof Error ? error.message : String(error)); if (propagate) throw error; }
+    catch (error) { new Notice(error instanceof Error ? error.message : String(error)); return false; }
     finally { this.busy = false; }
   }
 
