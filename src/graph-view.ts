@@ -16,6 +16,7 @@ import { isMacTrackpadPan } from "./graph-wheel";
 import { ThoughtReadingLayout } from "./thought-reading-layout";
 import { placeGraphLabels } from "./graph-label-placement";
 import { ReadingTransition } from "./reading-transition";
+import { ThoughtLaneView } from "./thought-lane-view";
 
 export { VIEW_TYPE } from "./mind-view-mode";
 import { VIEW_TYPE } from "./mind-view-mode";
@@ -36,6 +37,10 @@ const MIN_ZOOM = 0.05;
 const MAX_ZOOM = 8;
 
 export class BrainOSGraphView extends FileView {
+  private laneView?: ThoughtLaneView;
+  private laneContainer?: HTMLElement;
+  private displayMode: "lanes" | "graph" = "lanes";
+  private displayTabs?: HTMLElement;
   private canvas!: HTMLCanvasElement;
   private search!: HTMLInputElement;
   private status!: HTMLElement;
@@ -99,6 +104,12 @@ export class BrainOSGraphView extends FileView {
   getDisplayText() { return this.file?.basename ?? "思维视图"; }
   getIcon() { return "git-branch"; }
   canAcceptExtension(extension: string) { return extension === "md"; }
+  getEphemeralState() { return { ...super.getEphemeralState(), displayMode: this.displayMode, ...this.laneView?.state() }; }
+  setEphemeralState(state: Record<string, unknown>) {
+    super.setEphemeralState(state);
+    if (state.displayMode === "lanes" || state.displayMode === "graph") this.displayMode = state.displayMode;
+    this.syncDisplayMode(); this.laneView?.restore(state);
+  }
   private get source() { return this.file ? "thoughts" : this.plugin.layout.graph.source; }
 
   async onLoadFile(file: TFile) {
@@ -125,6 +136,31 @@ export class BrainOSGraphView extends FileView {
     this.closed = false;
     this.contentEl.empty();
     this.contentEl.addClass("brainos-graph-view");
+    this.displayTabs = this.contentEl.createDiv({ cls: "brainos-display-tabs", attr: { "role": "group", "aria-label": "思考视图" } });
+    for (const [mode, label] of [["lanes", "思路"], ["graph", "全局图"], ["raw", "Raw"]] as const) {
+      const button = this.displayTabs.createEl("button", { text: label, attr: { "data-mode": mode, "aria-pressed": "false" } });
+      button.onclick = () => {
+        if (mode === "raw") { if (this.file) this.laneView?.raw(); return; }
+        this.displayMode = mode; this.syncDisplayMode();
+        if (mode === "lanes" && this.file) void this.laneView?.show(this.file);
+        else this.resize();
+      };
+    }
+    this.laneContainer = this.contentEl.createDiv({ cls: "brainos-lane-view" });
+    this.laneView = this.addChild(new ThoughtLaneView(this.app, this.laneContainer, {
+      raw: line => {
+        if (!this.file) return;
+        void this.plugin.openMarkdownView(this.leaf, this.file).then(async () => {
+          const state = this.leaf.view.getState();
+          await this.leaf.setViewState({ type: "markdown", state: { ...state, mode: "source", source: true }, active: true });
+          if (this.leaf.view instanceof MarkdownView) {
+            this.leaf.view.editor.setCursor({ line, ch: 0 });
+            this.leaf.view.editor.scrollIntoView({ from: { line, ch: 0 }, to: { line, ch: 0 } }, true);
+          }
+        });
+      },
+      changed: () => this.plugin.refreshViews(),
+    }));
     const edit = this.addAction("pencil", "切换到编辑视图", () => {
       if (this.file) void this.plugin.openMarkdownView(this.leaf, this.file);
       else new Notice("先打开一篇笔记，或通过命令「BrainOS Graph：新建思考」开始");
@@ -175,6 +211,7 @@ export class BrainOSGraphView extends FileView {
       if (!this.closed && !this.file) void this.refresh();
     });
     this.canvas.focus();
+    this.syncDisplayMode();
   }
 
   async onClose() {
@@ -219,6 +256,18 @@ export class BrainOSGraphView extends FileView {
     this.forceLayout.setSelected(this.selected);
     this.startLayoutAnimation();
     this.resize();
+    this.syncDisplayMode();
+    if (this.file && this.displayMode === "lanes") await this.laneView?.show(this.file);
+  }
+
+  private syncDisplayMode() {
+    const lanes = !!this.file && this.source === "thoughts" && this.displayMode === "lanes";
+    this.contentEl.toggleClass("brainos-show-lanes", lanes);
+    if (this.laneContainer) this.laneContainer.hidden = !lanes;
+    this.displayTabs?.querySelectorAll<HTMLButtonElement>("button").forEach(button => {
+      button.setAttribute("aria-pressed", String(button.dataset.mode === (lanes ? "lanes" : "graph")));
+      button.disabled = button.dataset.mode !== "graph" && !this.file;
+    });
   }
 
   private filterSnapshot() {
@@ -976,7 +1025,7 @@ export class BrainOSGraphView extends FileView {
       const visits = this.snapshot.steps?.filter(step => step.thoughtPath === thought) ?? [];
       let index = visits.length - 1;
       while (index >= 0 && visits[index].key !== node.path) index--;
-      parent = index > 0 && visits[index - 1].pathIndex === visits[index].pathIndex ? visits[index - 1].key : undefined;
+      parent = visits[index]?.parentKey;
     }
     const displayed = this.displayPoint(node);
     await this.beginCreate({ x: displayed.x + (child ? 240 : 0), y: displayed.y + (child ? 0 : 140) }, parent, thought, !child);
@@ -990,13 +1039,13 @@ export class BrainOSGraphView extends FileView {
     const visits = this.snapshot.steps?.filter(step => step.thoughtPath === thought) ?? [];
     let index = visits.length - 1;
     while (index >= 0 && visits[index].key !== node.path) index--;
-    const child = visits[index], parent = visits[index - 1];
-    if (!child || !parent || child.pathIndex !== parent.pathIndex) { new Notice("当前节点没有父节点，无法在中间插入"); return; }
-    const parentNode = this.nodes.find(item => item.path === parent.key);
+    const child = visits[index], parentKey = child?.parentKey;
+    if (!child || !parentKey) { new Notice("当前节点没有父节点，无法在中间插入"); return; }
+    const parentNode = this.nodes.find(item => item.path === parentKey);
     const displayed = this.displayPoint(node), parentPoint = parentNode && this.displayPoint(parentNode);
     const point = parentPoint ? { x: (displayed.x + parentPoint.x) / 2, y: (displayed.y + parentPoint.y) / 2 }
       : { x: displayed.x - 240, y: displayed.y };
-    await this.beginCreate(point, parent.key, thought, false, { child: node.path, parent: parent.key, ordinal: child.ordinal });
+    await this.beginCreate(point, parentKey, thought, false, { child: node.path, parent: parentKey, ordinal: child.ordinal });
   }
 
   private async beginCreate(point: Point, parent?: string, target = this.editingThought(), newPath = false, insertion?: InsertThoughtTarget) {

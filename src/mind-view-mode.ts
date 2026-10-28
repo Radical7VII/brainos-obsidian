@@ -6,6 +6,7 @@ export const VIEW_TYPE = "brainos-graph-view";
 export class MindViewMode {
   private markdown = new WeakMap<WorkspaceLeaf, { file: string; state: Record<string, unknown>; ephemeral: Record<string, unknown> }>();
   private switching = new WeakSet<WorkspaceLeaf>();
+  private mind = new WeakMap<WorkspaceLeaf, { file: string; ephemeral: Record<string, unknown> }>();
 
   async showMind(leaf: WorkspaceLeaf, file: string) {
     if (this.switching.has(leaf)) return;
@@ -16,6 +17,8 @@ export class MindViewMode {
         if (state.file === file) this.markdown.set(leaf, { file, state: { ...state }, ephemeral: leaf.view.getEphemeralState() });
       }
       await leaf.setViewState({ type: VIEW_TYPE, state: { file }, active: true });
+      const saved = this.mind.get(leaf);
+      if (saved?.file === file) leaf.view.setEphemeralState(saved.ephemeral);
     } finally { this.switching.delete(leaf); }
   }
 
@@ -23,6 +26,9 @@ export class MindViewMode {
     if (this.switching.has(leaf)) return;
     this.switching.add(leaf);
     try {
+      if (leaf.view.getViewType() === VIEW_TYPE && leaf.view.getState().file === file) {
+        this.mind.set(leaf, { file, ephemeral: leaf.view.getEphemeralState?.() ?? {} });
+      }
       const saved = this.markdown.get(leaf);
       const sameFile = saved?.file === file;
       await leaf.setViewState({ type: "markdown", state: sameFile ? { ...saved.state, file } : { file, mode: "source" }, active: true });

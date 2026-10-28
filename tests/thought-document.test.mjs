@@ -23,7 +23,7 @@ const names=doc=>doc.occurrences.map(visit=>visit.title);
 const pairs=graph=>graph.edges.map(edge=>[graph.nodes.find(node=>node.path===edge.from).label,graph.nodes.find(node=>node.path===edge.to).label]);
 
 test('plain list paths preserve chronology, revisits, floating roots, branches and later convergence',async()=>{
-  const text='- A\n  第一次的说明。\n- B\n- C\n\n---\n\n- 独立想法\n\n---\n\n- A\n  回到这里补充。\n- D\n- C\n- 独立想法\n';
+  const text="- A\n  第一次的说明。\n  → B\n\n- B\n  → C\n\n- C\n\n\n- 独立想法\n\n\n- A\n  回到这里补充。\n  → D\n\n- D\n  → C\n\n- C\n  → 独立想法\n\n- 独立想法\n";
   const doc=parseThoughtDocument(text);
   assert.deepEqual(names(doc),['A','B','C','独立想法','A','D','C','独立想法']);
   assert.equal(doc.nodes.length,5);assert.equal(doc.paths.length,3);
@@ -34,8 +34,8 @@ test('plain list paths preserve chronology, revisits, floating roots, branches a
   assert.equal(graph.steps.length,8);assert.deepEqual(graph.steps.map(step=>step.pathIndex),[0,0,0,1,2,2,2,2]);
   assert.equal(f.writes.length,0);
 });
-test('blank lines are presentation only; an explicit separator breaks the chain',()=>{
-  const doc=parseThoughtDocument('- A\n\n- B\n\n---\n\n- C\n- D');
+test('blank lines are presentation only; only arrows connect adjacent records',()=>{
+  const doc=parseThoughtDocument("- A\n\n  → B\n\n- B\n\n\n- C\n  → D\n\n- D");
   assert.deepEqual(doc.paths.map(path=>path.map(visit=>visit.title)),[['A','B'],['C','D']]);
   assert.equal(doc.relations.length,2);
 });
@@ -48,12 +48,12 @@ test('multiline bodies can contain lists, headings, separators and code without 
   assert.equal(doc.paths.length,1);assert.equal(doc.relations.length,1);
 });
 test('code fences, comments and existing custom YAML are not structural steps',()=>{
-  const text='---\ntags: [thought]\nexample: |\n  - not a node\n---\n\n<!--\n- hidden\n---\n-->\n\x60\x60\x60md\n- example\n---\n\x60\x60\x60\n- A\n- B\n';
+  const text="---\ntags: [thought]\nexample: |\n  - not a node\n---\n\n<!--\n- hidden\n---\n-->\n```md\n- example\n---\n```\n- A\n  → B\n\n- B\n";
   const doc=parseThoughtDocument(text);assert.deepEqual(names(doc),['A','B']);assert.equal(doc.paths.length,1);
-  assert.deepEqual(names(parseThoughtDocument('---\n\n- A\n---\n- B')),['A','B']);
+  assert.deepEqual(names(parseThoughtDocument("\n- A\n- B")),['A','B']);
 });
 test('CRLF files, punctuation, emoji and whitespace preserve file-local names',()=>{
-  const doc=parseThoughtDocument('- 一个想法：你好 👋  \r\n  正文。\r\n\r\n- 一个想法：你好 👋\r\n- 一个想法：你好\r\n');
+  const doc=parseThoughtDocument("- 一个想法：你好 👋  \r\n  正文。\r\n\r\n  → 一个想法：你好 👋\n\n- 一个想法：你好 👋\r\n  → 一个想法：你好\n\n- 一个想法：你好\r\n");
   assert.equal(doc.nodes.length,2);assert.equal(doc.occurrences[0].body,'正文。');
   assert.equal(doc.nodes[0].occurrences.length,2);
   assert.deepEqual(api.splitNodeKey(nodeKey('文件#名.md',titleID('A # / % 👋'))),{file:'文件#名.md',id:titleID('A # / % 👋')});
@@ -113,12 +113,14 @@ test('a forced branch starts a new path even when its source is the current tail
   await createThoughtNode(f.app,file.path,'B','',{key:nodeKey(file.path,titleID('A')),title:'A',newPath:true});
   assert.deepEqual(parseThoughtDocument(f.content.get(file.path)).paths.map(path=>path.map(v=>v.title)),[['A'],['A','B']]);
 });
-test('a trailing separator remains a boundary when continuing from an earlier node',()=>{
-  const text=appendDocumentContinuation('- A\n\n---\n\n这里是说明。\n','A','B');
-  assert.deepEqual(parseThoughtDocument(text).paths.map(path=>path.map(v=>v.title)),[['A'],['A','B']]);
+test('continuing a disconnected tail adds an explicit arrow and preserves its prose',()=>{
+  const text=appendDocumentContinuation('- A\n  这里是说明。\n','A','B');
+  assert.deepEqual(parseThoughtDocument(text).paths.map(path=>path.map(v=>v.title)),[['A','B']]);
+  assert.equal(parseThoughtDocument(text).nodes[0].body,'这里是说明。');
+  assert.match(text,/→ B/);
 });
 test('renaming updates every occurrence and editing one visit preserves other visit bodies',async()=>{
-  const f=fixture(),file=f.add('多次.md','- A\n  初次正文。\n- B\n\n---\n\n- A\n  再次正文。\n- C\n');
+  const f=fixture(),file=f.add('多次.md',"- A\n  初次正文。\n  → B\n\n- B\n\n\n- A\n  再次正文。\n  → C\n\n- C\n");
   const key=nodeKey(file.path,titleID('A')),before=await readThoughtNode(f.app,key,0);
   const renamed=await editThoughtNode(f.app,key,'新的 A','更新初次正文。',before.node);
   const doc=parseThoughtDocument(f.content.get(file.path));
@@ -130,7 +132,7 @@ test('renaming updates every occurrence and editing one visit preserves other vi
   assert.equal(f.content.get(file.path),original);
 });
 test('concurrent edits elsewhere are allowed, but changed or extra visits to the edited node are rejected',async()=>{
-  const f=fixture(),file=f.add('并发.md','- A\n  A0\n- B\n  B0\n');
+  const f=fixture(),file=f.add('并发.md',"- A\n  A0\n  → B\n\n- B\n  B0\n");
   const a=nodeKey(file.path,titleID('A')),b=nodeKey(file.path,titleID('B')),snapshot=(await readThoughtNode(f.app,a)).node;
   await editThoughtNode(f.app,b,'B','B1');await editThoughtNode(f.app,a,'A','A1',snapshot);
   await assert.rejects(()=>editThoughtNode(f.app,a,'A','覆盖',snapshot),/其他位置修改/);
@@ -141,14 +143,14 @@ test('concurrent edits elsewhere are allowed, but changed or extra visits to the
   assert.equal((await readThoughtNode(f.app,b)).node.body,'B1');
 });
 test('unlinking splits every occurrence of an edge without losing prose or other edges',async()=>{
-  const f=fixture(),file=f.add('断开.md','- A\n  第一次正文\n- B\n- C\n\n---\n\n- A\n  第二次正文\n- B\n');
+  const f=fixture(),file=f.add('断开.md',"- A\n  第一次正文\n  → B\n\n- B\n  → C\n\n- C\n\n\n- A\n  第二次正文\n  → B\n\n- B\n");
   await unlinkThoughtNodes(f.app,file.path,nodeKey(file.path,titleID('A')),nodeKey(file.path,titleID('B')));
   assert.deepEqual(pairs(await buildThoughtSnapshot(f.app,file)),[['B','C']]);
   const doc=parseThoughtDocument(f.content.get(file.path));assert.equal(doc.occurrences.length,5);
   assert.deepEqual(doc.nodes.find(node=>node.title==='A').occurrences.map(v=>v.body),['第一次正文','第二次正文']);
 });
 test('deleting every visit of a middle node never connects its former neighbors',async()=>{
-  const f=fixture(),file=f.add('删除.md','- A\n- B\n  B正文\n- C\n\n---\n\n- D\n- B\n- E\n');
+  const f=fixture(),file=f.add('删除.md',"- A\n  → B\n\n- B\n  B正文\n  → C\n\n- C\n\n\n- D\n  → B\n\n- B\n  → E\n\n- E\n");
   await removeThoughtNode(f.app,file.path,nodeKey(file.path,titleID('B')));
   const graph=await buildThoughtSnapshot(f.app,file);
   assert.deepEqual(graph.nodes.map(node=>node.label),['A','C','D','E']);assert.equal(graph.edges.length,0);
@@ -186,7 +188,7 @@ test('external nodes can form a path in a third file without modifying either so
   await unlinkThoughtNodes(f.app,a.path,b1,c1);assert.equal((await buildThoughtSnapshot(f.app,a)).edges.length,0);
 });
 test('body links remain readable on unlink, while code links stay inert',async()=>{
-  const f=fixture(),file=f.add('正文链接.md','- A\n  正文 [[#B|B 的文字]] 和 \x60[[#C]]\x60\n\n---\n\n- B\n');
+  const f=fixture(),file=f.add('正文链接.md',"- A\n  正文 [[#B|B 的文字]] 和 `[[#C]]`\n\n\n- B\n");
   const a=nodeKey(file.path,titleID('A')),b=nodeKey(file.path,titleID('B'));
   assert.deepEqual(pairs(await buildThoughtSnapshot(f.app,file)),[['A','B']]);
   await unlinkThoughtNodes(f.app,file.path,a,b);
@@ -194,14 +196,14 @@ test('body links remain readable on unlink, while code links stay inert',async()
   assert.match((await readThoughtNode(f.app,a)).node.body,/正文 B 的文字/);
 });
 test('ordinary file aliases stay file links; missing node references remain unresolved without creating files',async()=>{
-  const f=fixture(),file=f.add('链接.md','- A\n  [[普通笔记|阅读它]]\n\n---\n\n- [[Missing.md|失效观点]]\n');
+  const f=fixture(),file=f.add('链接.md',"- A\n  [[普通笔记|阅读它]]\n\n\n- [[Missing.md|失效观点]]\n");
   f.add('普通笔记.md','# 普通笔记');
   const graph=await buildThoughtSnapshot(f.app,file);
   assert.ok(graph.nodes.some(node=>node.path==='普通笔记.md'&&node.kind==='note'));
   assert.ok(graph.nodes.some(node=>node.label==='失效观点'&&node.kind==='unresolved'));assert.equal(f.created.length,0);
 });
 test('global discovery recognizes unmarked lists and keeps same names in different files separate',async()=>{
-  const f=fixture();f.add('A.md','- 同名\n- B\n');f.add('B.md','- 同名\n');f.add('普通.md','# 普通笔记\n正文。');
+  const f=fixture();f.add('A.md',"- 同名\n  → B\n\n- B\n");f.add('B.md','- 同名\n');f.add('普通.md','# 普通笔记\n正文。');
   const graph=await buildThoughtSnapshot(f.app);
   assert.deepEqual(graph.thoughts.map(thought=>thought.path),['A.md','B.md']);
   assert.equal(graph.nodes.filter(node=>node.label==='同名').length,2);assert.equal(f.writes.length,0);
@@ -258,7 +260,7 @@ test('unaliased file-list entries remain whole-file references',async()=>{
   assert.equal(graph.nodes.length,1);assert.equal(graph.nodes[0].path,'普通笔记.md');assert.equal(graph.nodes[0].kind,'note');
 });
 test('an unclosed body edit cannot hide later visits, and inline code comments stay literal',async()=>{
-  const f=fixture(),file=f.add('正文.md','- A\n  讨论 \x60<!--\x60 这段代码。\n- B\n');
+  const f=fixture(),file=f.add('正文.md',"- A\n  讨论 `<!--` 这段代码。\n  → B\n\n- B\n");
   const a=nodeKey(file.path,titleID('A')),before=f.content.get(file.path);
   assert.equal((await buildThoughtSnapshot(f.app,file)).nodes.length,2);
   await assert.rejects(()=>editThoughtNode(f.app,a,'A','\x60\x60\x60md\n未闭合'),/遮蔽后续记录/);
@@ -281,20 +283,20 @@ test('legacy region introductions and empty-region prose survive conversion',asy
 
 test('inserting before a cross-file reference edits only the current thought path',async()=>{
   const f=fixture();f.add('来源.md','- 原节点\n  来源正文\n');
-  f.add('当前.md','- 起点\n  起点正文\n- [[来源.md|原节点]]\n  引用正文\n');
+  f.add('当前.md',"- 起点\n  起点正文\n  → [[来源.md|原节点]]\n\n- [[来源.md|原节点]]\n  引用正文\n");
   await api.insertThoughtNode(f.app,'当前.md','中间',{child:nodeKey('来源.md',titleID('原节点')),parent:nodeKey('当前.md',titleID('起点')),ordinal:0});
-  assert.equal(f.content.get('当前.md'),'- 起点\n  起点正文\n- 中间\n- [[来源.md|原节点]]\n  引用正文\n');
+  assert.equal(f.content.get('当前.md'),"- 起点\n  起点正文\n  → 中间\n\n- 中间\n  → [[来源.md|原节点]]\n\n- [[来源.md|原节点]]\n  引用正文\n");
   assert.equal(f.content.get('来源.md'),'- 原节点\n  来源正文\n');
 });
 test('document insertion cannot cross path boundaries or add a file-reference title',()=>{
-  const original='- A\n\n---\n\n- B\n';
+  const original="- A\n\n\n- B\n";
   assert.throws(()=>api.insertDocumentStepBefore(original,1,'新节点'),/没有父节点/);
-  assert.throws(()=>api.insertDocumentStepBefore('- A\n- B\n',1,'[[外部.md]]'),/普通节点名称/);
+  assert.throws(()=>api.insertDocumentStepBefore("- A\n  → B\n\n- B\n",1,'[[外部.md]]'),/普通节点名称/);
 });
 
 test('thought directory scopes reads, descendants and references without reading outside Markdown',async()=>{
   const f=fixture();
-  f.add('BrainOS/思考.md','- A\n- [[BrainOS/子目录/另一个.md|B]]\n- [[其他/杂音.md|杂音]]\n  正文链接 [[BrainOS-other/相似目录.md]]\n');
+  f.add('BrainOS/思考.md',"- A\n  → [[BrainOS/子目录/另一个.md|B]]\n\n- [[BrainOS/子目录/另一个.md|B]]\n  → [[其他/杂音.md|杂音]]\n\n- [[其他/杂音.md|杂音]]\n  正文链接 [[BrainOS-other/相似目录.md]]\n");
   f.add('BrainOS/子目录/另一个.md','- B\n');
   f.add('其他/杂音.md','<!-- brainos-state\n损坏\n-->');
   f.add('BrainOS-other/相似目录.md','- 不应读取\n');f.add('根目录.md','- 不应读取\n');

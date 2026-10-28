@@ -151,11 +151,13 @@ export async function insertThoughtNode(app: App, owner: string, title: string, 
     const visits = parseThoughtDocument(markdown).occurrences;
     const matches = visits.flatMap((visit, index) => keys.entry(visit.id) === target.child && visit.ordinal === target.ordinal ? [index] : []);
     if (matches.length !== 1) throw new Error("当前节点的记录已变化，请刷新后重试");
-    const index = matches[0], previous = visits[index - 1];
-    if (!previous || previous.path !== visits[index].path || keys.entry(previous.id) !== target.parent) {
+    const index = matches[0], doc = parseThoughtDocument(markdown);
+    const incoming = doc.relations.filter(edge => edge.to === visits[index].id && keys.entry(edge.from) === target.parent);
+    const edge = incoming[incoming.length - 1];
+    if (!edge) {
       throw new Error("父节点或路径已变化，请刷新后重试");
     }
-    return insertDocumentStepBefore(markdown, index, title);
+    return insertDocumentStepBefore(markdown, index, title, edge.from);
   });
   return nodeKey(owner, titleID(cleanNodeTitle(title)));
 }
@@ -260,7 +262,7 @@ export async function buildThoughtSnapshot(app: App, thoughtFile?: TFile, folder
     let value = nodes.get(key);
     if (!value) {
       value = { path: key, openPath: file.path, label: node.title, ownerPath: file.path, nodeId: node.id,
-        x: NaN, y: NaN, degree: 0, thoughts: [], kind: "note" };
+        x: NaN, y: NaN, degree: 0, thoughts: [], kind: node.occurrences.length ? "note" : "unresolved" };
       nodes.set(key, value);
     }
     if (!value.thoughts.includes(owner)) value.thoughts.push(owner);
@@ -301,10 +303,14 @@ export async function buildThoughtSnapshot(app: App, thoughtFile?: TFile, folder
     const keys = new Map<string, string>();
     for (const node of document.doc.nodes) keys.set(node.id, node.target ? await resolve(file.path, node.target, node.referenceLabel, node.referenceLabel !== undefined) : addNode(file, node, file.path));
     for (const relation of document.doc.relations) addEdge(file.path, keys.get(relation.from)!, keys.get(relation.to)!);
-    for (const visit of document.doc.occurrences) {
+    for (const [index, visit] of document.doc.occurrences.entries()) {
       const key = keys.get(visit.id)!;
       if (!key) continue;
-      steps.push({ key, title: visit.title, body: visit.body, thoughtPath: file.path, pathIndex: visit.path, ordinal: visit.ordinal });
+      const incoming = document.doc.relations.filter(edge => edge.to === visit.id && edge.sourceIndex !== undefined
+        && document.doc.occurrences.findIndex((v, i) => i > edge.sourceIndex! && v.id === visit.id) === index);
+      const parent = incoming[incoming.length - 1];
+      steps.push({ key, title: visit.title, body: visit.body, thoughtPath: file.path, pathIndex: visit.path, ordinal: visit.ordinal,
+        parentKey: parent ? keys.get(parent.from) : undefined });
       for (const link of documentLinks(visit.body)) addEdge(file.path, key, await resolve(file.path, link.target, link.label));
     }
   }

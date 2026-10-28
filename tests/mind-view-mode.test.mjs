@@ -11,7 +11,7 @@ function fixture(path='笔记/A.md',mode='source') {
     view:{getViewType:()=> 'markdown',getState:()=>({file:path,mode,source:false}),getEphemeralState:()=>ephemeral},
     async setViewState(state) {
       calls.push(state);
-      this.view={getViewType:()=>state.type,getState:()=>state.state,setEphemeralState:value=>{this.ephemeral=value;}};
+      this.view={getViewType:()=>state.type,getState:()=>state.state,getEphemeralState:()=>this.ephemeral??{},setEphemeralState:value=>{this.ephemeral=value;}};
     },
   };
   return {leaf,calls,ephemeral};
@@ -23,6 +23,15 @@ test('same leaf switches to its file and restores native reading mode, cursor an
   await modes.showMarkdown(leaf,'笔记/A.md');
   assert.equal(calls[1].type,'markdown');assert.equal(calls[1].state.mode,'preview');
   assert.deepEqual(leaf.ephemeral,ephemeral);
+});
+test('Raw round trips retain the selected occurrence, display mode and lane scroll',async()=>{
+  const {leaf}=fixture();const modes=new MindViewMode();
+  await modes.showMind(leaf,'笔记/A.md');
+  const selected={selected:4,scrollTop:180,displayMode:'lanes'};
+  leaf.view.getEphemeralState=()=>selected;
+  await modes.showMarkdown(leaf,'笔记/A.md');
+  await modes.showMind(leaf,'笔记/A.md');
+  assert.deepEqual(leaf.ephemeral,selected);
 });
 test('following another file in mind view does not reuse the previous file cursor',async()=>{
   const {leaf,calls}=fixture();const modes=new MindViewMode();

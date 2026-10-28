@@ -38,7 +38,7 @@ When updating manually, keep your existing `data.json`.
 
 Set a thought folder in the plugin settings to limit the shared graph and node suggestions to Markdown files in that folder and its subfolders. An empty setting includes the whole vault.
 
-Run **新建思考** (New thought) from the command palette or the new-tab page. Create nodes by double-clicking empty canvas space. Each thought belongs to one Markdown file, while the canvas shows all thoughts in the configured folder. Hover over a file in the file explorer to preview its path.
+Run **新建思考** (New thought) from the command palette or the new-tab page. The default thought view uses Git-style lanes with aligned text and expandable bodies. Use New idea or Tab to create nodes inline. Switch to Global graph for the free canvas, or Raw for the native Markdown source editor. Each thought belongs to one Markdown file, while the canvas shows all thoughts in the configured folder. Hover over a file in the file explorer to preview its path.
 
 | Action | Shortcut or gesture |
 | --- | --- |
@@ -56,22 +56,37 @@ Run **新建思考** (New thought) from the command palette or the new-tab page.
 
 Type a node title to see matching nodes from the thought folder. Choose an existing node to reuse it or reference one from another file. Edit body text in the Markdown view. Flowing dashed edges indicate direction. Selecting a node temporarily expands the active thought into a reading layout; click empty space or press Escape to return to the free layout.
 
+In the lane view, Tab extends the focused node, Enter starts a sibling branch from its predecessor, and Space edits the title in place. Up/down select the previous/next visible row, just like a Git log. Branch lines describe relationships only; there is no left/right navigation. Moving selection does not enter title editing. While typing, Enter saves, Tab saves and continues, and Escape cancels. IME composition does not submit a node. Raw round trips preserve the selected occurrence and scroll position. The canvas gestures in the table above remain available in Global graph.
+
 ## Markdown format
 
 ```md
 - First idea
   Optional body text belongs to this visit.
+  → Second idea
+  → Another branch
+
 - Second idea
+  → Conclusion
 
----
-
-- First idea
 - Another branch
+  → Conclusion
+
+- Conclusion
 ```
 
-Top-level list items are node visits. Consecutive items form directed edges. A horizontal rule starts a separate path. Repeated titles reuse a node within the same file; identical titles in different files are independent. Node bodies are indented by two spaces and remain attached to individual visits.
+Top-level list items are node visits. Only explicit, two-space-indented arrows create edges; adjacent items never connect automatically. `  - to: Target` is also accepted. Repeated titles reuse a node within the same file while retaining each visit's body. Code fences, comments and deeply nested arrows remain prose.
 
-An explicit cross-file node reference looks like `- [[Other thought.md|Node title]]`. The alias identifies the node inside that file. Content and connections are reconstructed from Markdown; stored coordinates are only auxiliary layout data.
+Use `  → [[Other thought.md|Node title]]` for a cross-file connection. The alias identifies the source node; content is not copied. Unresolved targets remain visible. Stored coordinates are auxiliary layout data, not the source of graph structure.
+
+Existing adjacency/`---` files must be converted once before switching versions. Startup and refresh never run conversion. First inspect the explicitly selected files, then write with a backup directory:
+
+```sh
+node scripts/convert-thought-paths.mjs /absolute/path/Thought.md
+node scripts/convert-thought-paths.mjs --write --backup-dir /absolute/path/backup /absolute/path/Thought.md
+```
+
+The converter verifies visit bodies and connections, preserves YAML and code, and rejects a file that already contains arrow relations.
 
 ## Privacy
 

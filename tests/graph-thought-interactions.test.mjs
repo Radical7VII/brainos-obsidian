@@ -17,6 +17,7 @@ class Element {
   select(){this.selectionStart=0;this.selectionEnd=this.value.length;}
   empty(){this.children=[];}
   addClass(){}
+  toggleClass(){}
   removeClass(){}
   getBoundingClientRect(){return {left:0,top:0};}
   setPointerCapture(){}
@@ -63,7 +64,7 @@ async function settle(view){
 }
 
 test('inline same-name creation reuses the existing position and records the return',async()=>{
-  const f=await fixture('- A\n- B\n');
+  const f=await fixture("- A\n  → B\n\n- B\n");
   f.plugin.layout.positions[f.key('A')]={x:10,y:20};
   const b=f.view.nodes.find(node=>node.label==='B');f.view.selected=b.path;
   await f.view.createRelative(true);
@@ -72,20 +73,20 @@ test('inline same-name creation reuses the existing position and records the ret
   assert.equal(f.view.selected,f.key('A'));assert.equal(f.view.nodes.length,2);
   assert.deepEqual(f.plugin.layout.positions[f.key('A')],{x:10,y:20});
   assert.deepEqual(f.session.stepKeys,[f.key('B'),f.key('A')]);
-  assert.equal(f.content.get(f.file.path),'- A\n- B\n- A\n');
+  assert.equal(f.content.get(f.file.path),"- A\n  → B\n\n- B\n  → A\n\n- A\n");
 });
 test('empty-canvas creation stays independent and branching uses the most recent occurrence predecessor',async()=>{
-  const f=await fixture('- A\n- B\n\n---\n\n- C\n- B\n');
+  const f=await fixture("- A\n  → B\n\n- B\n\n\n- C\n  → B\n\n- B\n");
   f.view.selected=f.key('B');
   await f.view.createRelative(false);
   assert.equal(f.view.draftParent,f.key('C'));f.view.closeEditor();
   await f.view.beginCreate({x:100,y:100});
   f.view.editor.find('input')[0].value='独立';f.view.editor.requestSubmit();await settle(f.view);
   assert.ok(!f.view.edges.some(edge=>edge.to===f.key('独立')));
-  assert.match(f.content.get(f.file.path),/---\n\n- 独立\n$/);
+  assert.match(f.content.get(f.file.path),/\n\n- 独立\n$/);
 });
 test('editing is one inline title input and preserves every body byte for byte',async()=>{
-  const original='- A\n  第一次  \n  `代码`\n- B\n\n---\n\n- A\n  第二次\n';
+  const original="- A\n  第一次  \n  `代码`\n  → B\n\n- B\n\n\n- A\n  第二次\n";
   const f=await fixture(original);await f.view.beginEdit(f.view.nodes.find(node=>node.label==='A'));
   const form=f.view.editor;
   assert.equal(form.options.cls,'brainos-node-title-editor');
@@ -96,7 +97,7 @@ test('editing is one inline title input and preserves every body byte for byte',
   assert.equal(f.view.selected,f.key('改名'));assert.equal(f.view.editor,undefined);
 });
 test('inline title editing cancels without writing and keeps the editor after conflicts',async()=>{
-  const original='- A\n  正文\n- B\n',f=await fixture(original);
+  const original="- A\n  正文\n  → B\n\n- B\n",f=await fixture(original);
   await f.view.beginEdit(f.view.nodes[0]);let form=f.view.editor;
   form.find('input')[0].value='取消修改';form.onkeydown(keyEvent('Escape'));
   assert.equal(f.view.editor,undefined);assert.equal(f.content.get(f.file.path),original);
@@ -112,14 +113,14 @@ function keyEvent(key,overrides={}){
   return {key,preventDefault(){this.prevented=true;},stopPropagation(){this.stopped=true;},...overrides};
 }
 test('Space edits the selected title with its text selected and preserves every visit body',async()=>{
-  const f=await fixture('- A\n  第一次\n- B\n- A\n  第二次\n');
+  const f=await fixture("- A\n  第一次\n  → B\n\n- B\n  → A\n\n- A\n  第二次\n");
   f.view.selected=f.key('A');
   const event=keyEvent(' ');f.view.onKeyDown(event);await settle(f.view);
   const form=f.view.editor,title=form.find('input')[0];
   assert.equal(event.prevented,true);assert.equal(Element.active,title);
   assert.equal(title.selectionStart,0);assert.equal(title.selectionEnd,1);
   title.value='新标题';form.requestSubmit();await settle(f.view);
-  assert.equal(f.content.get(f.file.path).trimEnd(),'- 新标题\n  第一次\n- B\n- 新标题\n  第二次');
+  assert.equal(f.content.get(f.file.path).trimEnd(),"- 新标题\n  第一次\n  → B\n\n- B\n  → 新标题\n\n- 新标题\n  第二次");
   assert.equal(f.view.selected,f.key('新标题'));
 });
 test('Space does not start title editing without selection or during other keyboard input',async()=>{
@@ -136,7 +137,7 @@ test('Space does not start title editing without selection or during other keybo
 });
 
 test('Command Enter inserts between the latest parent and selected node, preserving other paths and bodies',async()=>{
-  const f=await fixture('- A\n  A正文\n- B\n  B第一次\n\n---\n\n- C\n  C正文\n- B\n  B第二次\n- D\n');
+  const f=await fixture("- A\n  A正文\n  → B\n\n- B\n  B第一次\n\n\n- C\n  C正文\n  → B\n\n- B\n  B第二次\n  → D\n\n- D\n");
   f.view.selected=f.key('B');
   const c=f.view.nodes.find(node=>node.label==='C'),b=f.view.nodes.find(node=>node.label==='B');
   c.x=20;c.y=40;b.x=220;b.y=80;
@@ -144,14 +145,14 @@ test('Command Enter inserts between the latest parent and selected node, preserv
   assert.equal(event.prevented,true);assert.equal(f.view.draftParent,f.key('C'));
   assert.equal(f.view.draftChild,f.key('B'));assert.equal(f.view.draftNode.x,120);assert.equal(f.view.draftNode.y,60);
   f.view.editor.find('input')[0].value='中间';f.view.editor.requestSubmit();await settle(f.view);
-  assert.equal(f.content.get(f.file.path),'- A\n  A正文\n- B\n  B第一次\n\n---\n\n- C\n  C正文\n- 中间\n- B\n  B第二次\n- D\n');
+  assert.equal(f.content.get(f.file.path),"- A\n  A正文\n  → B\n\n- B\n  B第一次\n\n\n- C\n  C正文\n  → 中间\n\n- 中间\n  → B\n\n- B\n  B第二次\n  → D\n\n- D\n");
   assert.equal(f.view.selected,f.key('中间'));
   const has=(from,to)=>f.view.edges.some(edge=>edge.from===f.key(from)&&edge.to===f.key(to));
   assert.ok(has('A','B'));assert.ok(has('C','中间'));assert.ok(has('中间','B'));assert.ok(has('B','D'));
   assert.ok(!has('C','B'));
 });
 test('insert-parent shortcut cancels without writing and rejects a root or repeat/composition keys',async()=>{
-  const original='- A\n- B\n',f=await fixture(original);
+  const original="- A\n  → B\n\n- B\n",f=await fixture(original);
   f.view.selected=f.key('B');
   for(const flags of [{metaKey:true,repeat:true},{metaKey:true,isComposing:true},{metaKey:true,altKey:true},{metaKey:true,shiftKey:true}]){
     f.view.onKeyDown(keyEvent('Enter',flags));await settle(f.view);assert.equal(f.view.editor,undefined);
@@ -163,16 +164,16 @@ test('insert-parent shortcut cancels without writing and rejects a root or repea
   assert.equal(f.view.editor,undefined);assert.match(globalThis.lastNotice,/没有父节点/);
 });
 test('insertion refuses existing names and changed parents without modifying the document',async()=>{
-  const f=await fixture('- A\n- B\n');f.view.selected=f.key('B');await f.view.insertParent();
+  const f=await fixture("- A\n  → B\n\n- B\n");f.view.selected=f.key('B');await f.view.insertParent();
   const form=f.view.editor,title=form.find('input')[0];title.value='A';form.requestSubmit();await settle(f.view);
-  assert.equal(f.content.get(f.file.path),'- A\n- B\n');assert.equal(f.view.editor,form);
+  assert.equal(f.content.get(f.file.path),"- A\n  → B\n\n- B\n");assert.equal(f.view.editor,form);
   assert.match(globalThis.lastNotice,/同名/);
-  f.content.set(f.file.path,'- C\n- B\n');title.value='插入';form.requestSubmit();await settle(f.view);
-  assert.equal(f.content.get(f.file.path),'- C\n- B\n');assert.match(globalThis.lastNotice,/父节点或路径已变化/);
+  f.content.set(f.file.path,"- C\n  → B\n\n- B\n");title.value='插入';form.requestSubmit();await settle(f.view);
+  assert.equal(f.content.get(f.file.path),"- C\n  → B\n\n- B\n");assert.match(globalThis.lastNotice,/父节点或路径已变化/);
 });
 
 test('native title candidates distinguish reuse, references and creation, and reuse preserves position',async()=>{
-  const f=await fixture('- 方案\n  旧正文\n- 起点\n');f.addFile('其他.md','- 方案\n  外部正文\n');
+  const f=await fixture("- 方案\n  旧正文\n  → 起点\n\n- 起点\n");f.addFile('其他.md','- 方案\n  外部正文\n');
   f.plugin.layout.positions[f.key('方案')]={x:22,y:33};f.view.selected=f.key('起点');await f.view.createRelative(true);
   const suggest=f.view.titleSuggest,options=await suggest.getSuggestions('方案');
   assert.deepEqual(options.map(option=>option.kind),['reuse','reference']);
@@ -180,29 +181,29 @@ test('native title candidates distinguish reuse, references and creation, and re
   assert.deepEqual(await suggest.getSuggestions('全新想法'),[]);
   suggest.selectSuggestion(options[0],{});await settle(f.view);
   assert.equal(f.view.selected,f.key('方案'));assert.deepEqual(f.plugin.layout.positions[f.key('方案')],{x:22,y:33});
-  assert.match(f.content.get(f.file.path),/- 起点\n- 方案\n$/);
+  assert.match(f.content.get(f.file.path),/- 起点\n  → 方案\n\n- 方案\n$/);
   assert.equal(f.content.get('其他.md'),'- 方案\n  外部正文\n');
   assert.deepEqual(await suggest.getSuggestions('方案'),[]);
 });
 test('choosing a cross-file title candidate inserts a reference on a fresh sibling path',async()=>{
-  const f=await fixture('- 起点\n- 当前\n');f.addFile('来源.md','- 共享观点\n  来源正文\n');
+  const f=await fixture("- 起点\n  → 当前\n\n- 当前\n");f.addFile('来源.md','- 共享观点\n  来源正文\n');
   f.view.selected=f.key('当前');await f.view.createRelative(false);
   const options=await f.view.titleSuggest.getSuggestions('共享');
   assert.equal(options[0].kind,'reference');assert.equal(options.length,1);
   f.view.titleSuggest.selectSuggestion(options[0],{});await settle(f.view);
-  assert.equal(f.content.get(f.file.path),'- 起点\n- 当前\n\n---\n\n- 起点\n- [[来源.md|共享观点]]\n');
+  assert.equal(f.content.get(f.file.path),"- 起点\n  → 当前\n\n- 当前\n\n- 起点\n  → [[来源.md|共享观点]]\n\n- [[来源.md|共享观点]]\n");
   assert.equal(f.content.get('来源.md'),'- 共享观点\n  来源正文\n');
   assert.equal(f.view.selected,nodeKey('来源.md',titleID('共享观点')));
 });
 test('title suggestions respect composition, new-name insertion and cancellation',async()=>{
-  const f=await fixture('- A\n- B\n');f.view.selected=f.key('B');await f.view.insertParent();
+  const f=await fixture("- A\n  → B\n\n- B\n");f.view.selected=f.key('B');await f.view.insertParent();
   const suggest=f.view.titleSuggest;
   assert.deepEqual(await suggest.getSuggestions('A'),[]);
   assert.deepEqual(await suggest.getSuggestions('新节点'),[]);
   f.view.composing=true;assert.deepEqual(await suggest.getSuggestions('新节点'),[]);
-  suggest.selectSuggestion({kind:'reuse',node:f.view.nodes.find(node=>node.label==='A')},{});assert.equal(f.content.get(f.file.path),'- A\n- B\n');
+  suggest.selectSuggestion({kind:'reuse',node:f.view.nodes.find(node=>node.label==='A')},{});assert.equal(f.content.get(f.file.path),"- A\n  → B\n\n- B\n");
   f.view.composing=false;const pending=suggest.getSuggestions('新节点');f.view.closeEditor();
-  assert.deepEqual(await pending,[]);assert.equal(f.content.get(f.file.path),'- A\n- B\n');
+  assert.deepEqual(await pending,[]);assert.equal(f.content.get(f.file.path),"- A\n  → B\n\n- B\n");
 });
 
 test('inline editing a referenced title preserves source body and updates incoming references',async()=>{
@@ -217,7 +218,7 @@ test('inline editing a referenced title preserves source body and updates incomi
 });
 
 test('inline title editing offers native name/path rows and reuses the selected node without losing prose',async()=>{
-  const f=await fixture('- 网络\n  当前正文  \n- 网络服\n  候选正文\n');
+  const f=await fixture("- 网络\n  当前正文  \n  → 网络服\n\n- 网络服\n  候选正文\n");
   f.plugin.layout.positions[f.key('网络')]={x:10,y:20};
   f.plugin.layout.positions[f.key('网络服')]={x:100,y:200};
   await f.view.beginEdit(f.view.nodes.find(node=>node.label==='网络'));
@@ -230,14 +231,14 @@ test('inline title editing offers native name/path rows and reuses the selected 
   assert.equal(row.children[0].children[1].text,'思考.md');
   assert.equal((await suggest.getSuggestions(''))[0].node.label,'网络服');
   suggest.selectSuggestion(options[0],{});await settle(f.view);
-  assert.equal(f.content.get(f.file.path),'- 网络服\n  当前正文  \n- 网络服\n  候选正文\n');
+  assert.equal(f.content.get(f.file.path),"- 网络服\n  当前正文  \n  → 网络服\n\n- 网络服\n  候选正文\n");
   assert.equal(f.view.nodes.filter(node=>node.label==='网络服').length,1);
   assert.deepEqual(f.plugin.layout.positions[f.key('网络服')],{x:100,y:200});
   assert.equal(f.plugin.layout.positions[f.key('网络')],undefined);
   assert.equal(f.view.selected,f.key('网络服'));
 });
 test('inline editing lets native suggestion keys propagate and cancels its candidate provider',async()=>{
-  const f=await fixture('- 网络\n- 网络服\n');await f.view.beginEdit(f.view.nodes[0]);
+  const f=await fixture("- 网络\n  → 网络服\n\n- 网络服\n");await f.view.beginEdit(f.view.nodes[0]);
   const suggest=f.view.titleSuggest;suggest.open();
   for(const key of ['ArrowDown','ArrowUp','Enter','Escape']){
     const event=keyEvent(key);f.view.editor.onkeydown(event);
@@ -245,11 +246,11 @@ test('inline editing lets native suggestion keys propagate and cancels its candi
   }
   suggest.close();f.view.editor.onkeydown(keyEvent('Escape'));
   assert.equal(f.view.editor,undefined);assert.deepEqual(await suggest.getSuggestions('网络'),[]);
-  assert.equal(f.content.get(f.file.path),'- 网络\n- 网络服\n');
+  assert.equal(f.content.get(f.file.path),"- 网络\n  → 网络服\n\n- 网络服\n");
 });
 
 test('Backspace removes a selected node directly without bridging the remaining path',async()=>{
-  const f=await fixture('- A\n- B\n  B正文\n- C\n');f.view.selected=f.key('B');
+  const f=await fixture("- A\n  → B\n\n- B\n  B正文\n  → C\n\n- C\n");f.view.selected=f.key('B');
   const event=keyEvent('Backspace');f.view.onKeyDown(event);await settle(f.view);
   assert.equal(event.prevented,true);assert.equal(event.stopped,true);
   assert.ok(!f.view.nodes.some(node=>node.label==='B'));
@@ -257,16 +258,16 @@ test('Backspace removes a selected node directly without bridging the remaining 
   assert.equal(f.view.selected,undefined);
 });
 test('Backspace while editing or composing does not remove the node, and held keys are ignored',async()=>{
-  const f=await fixture('- A\n- B\n');f.view.selected=f.key('B');
+  const f=await fixture("- A\n  → B\n\n- B\n");f.view.selected=f.key('B');
   f.view.onKeyDown(keyEvent('Backspace',{repeat:true}));await settle(f.view);
   f.view.onKeyDown(keyEvent('Backspace',{isComposing:true}));await settle(f.view);
   await f.view.beginEdit(f.view.nodes.find(node=>node.label==='B'));
   f.view.onKeyDown(keyEvent('Backspace'));await settle(f.view);
   const event=keyEvent('Backspace');f.view.editor.onkeydown(event);assert.equal(event.prevented,undefined);
-  assert.equal(f.content.get(f.file.path),'- A\n- B\n');
+  assert.equal(f.content.get(f.file.path),"- A\n  → B\n\n- B\n");
 });
 test('Backspace removes a reference from the current thought without deleting its source',async()=>{
-  const f=await fixture('- A\n- [[来源.md|共享]]\n');f.addFile('来源.md','- 共享\n  来源正文\n');await f.view.refresh();
+  const f=await fixture("- A\n  → [[来源.md|共享]]\n\n- [[来源.md|共享]]\n");f.addFile('来源.md','- 共享\n  来源正文\n');await f.view.refresh();
   f.view.selected=nodeKey('来源.md',titleID('共享'));f.view.onKeyDown(keyEvent('Backspace'));await settle(f.view);
   assert.equal(f.content.get('来源.md'),'- 共享\n  来源正文\n');
   assert.ok(!f.content.get(f.file.path).includes('[[来源.md|共享]]'));
@@ -284,7 +285,7 @@ test('title search only matches node titles, never file names or paths',async()=
 });
 
 test('typing and deleting updates native candidates immediately, including during Chinese composition',async()=>{
-  const f=await fixture('- 起点\n- 网络服\n- 网络同步\n');await f.view.beginEdit(f.view.nodes.find(node=>node.label==='起点'));
+  const f=await fixture("- 起点\n  → 网络服\n\n- 网络服\n  → 网络同步\n\n- 网络同步\n");await f.view.beginEdit(f.view.nodes.find(node=>node.label==='起点'));
   const form=f.view.editor,input=form.find('input')[0],suggest=f.view.titleSuggest;
   input.dispatchEvent(new Event('compositionstart'));
   input.value='网络';input.dispatchEvent(new Event('input'));await settle(f.view);
@@ -296,7 +297,7 @@ test('typing and deleting updates native candidates immediately, including durin
   assert.equal(f.view.composing,false);assert.equal(suggest.rendered.length,2);
   input.value='完全不匹配';input.dispatchEvent(new Event('input'));await settle(f.view);
   assert.equal(suggest.isShowing,false);assert.deepEqual(suggest.rendered,[]);
-  assert.equal(f.content.get(f.file.path),'- 起点\n- 网络服\n- 网络同步\n');
+  assert.equal(f.content.get(f.file.path),"- 起点\n  → 网络服\n\n- 网络服\n  → 网络同步\n\n- 网络同步\n");
 });
 test('creation input searches while typing without submitting the new node',async()=>{
   const f=await fixture('- 网络服\n');await f.view.beginCreate({x:0,y:0});
@@ -323,7 +324,7 @@ function placeEdgeNodes(f){
 }
 function pointerAt(x,y){return {button:0,pointerId:1,pointerType:'mouse',clientX:x,clientY:y,preventDefault(){}};}
 test('hover highlights a line without editing and a single click disconnects it',async()=>{
-  const f=await fixture('- A\n  A正文\n- B\n  B正文\n- C\n');placeEdgeNodes(f);
+  const f=await fixture("- A\n  A正文\n  → B\n\n- B\n  B正文\n  → C\n\n- C\n");placeEdgeNodes(f);
   const original=f.content.get(f.file.path),event=pointerAt(450,302);
   f.view.onPointerMove(event);
   assert.equal(f.view.hoveredEdge.from,f.key('A'));assert.equal(f.view.hoveredEdge.to,f.key('B'));
@@ -336,7 +337,7 @@ test('hover highlights a line without editing and a single click disconnects it'
   assert.ok(f.view.edges.some(edge=>edge.from===f.key('B')&&edge.to===f.key('C')));
 });
 test('moving away clears line hover and clicking a node never disconnects its links',async()=>{
-  const original='- A\n- B\n',f=await fixture(original);placeEdgeNodes(f);
+  const original="- A\n  → B\n\n- B\n",f=await fixture(original);placeEdgeNodes(f);
   f.view.onPointerMove(pointerAt(450,302));assert.ok(f.view.hoveredEdge);
   f.view.onPointerMove(pointerAt(450,200));assert.equal(f.view.hoveredEdge,undefined);
   f.view.onPointerMove(pointerAt(450,302));
@@ -345,13 +346,13 @@ test('moving away clears line hover and clicking a node never disconnects its li
   assert.equal(f.view.selected,f.key('A'));assert.equal(f.content.get(f.file.path),original);
 });
 test('single click disconnects both visual directions while keeping nodes and prose',async()=>{
-  const f=await fixture('- A\n  第一次\n- B\n  中间\n- A\n  第二次\n');placeEdgeNodes(f);
+  const f=await fixture("- A\n  第一次\n  → B\n\n- B\n  中间\n  → A\n\n- A\n  第二次\n");placeEdgeNodes(f);
   const event=pointerAt(450,302);f.view.onPointerDown(event);f.view.onPointerUp(event);await settle(f.view);
   assert.equal(f.view.edges.length,0);assert.deepEqual(f.view.nodes.map(node=>node.label).sort(),['A','B']);
   for(const body of ['第一次','中间','第二次'])assert.ok(f.content.get(f.file.path).includes(body));
 });
 test('dragging or clicking blank canvas never disconnects a line',async()=>{
-  const f=await fixture('- A\n- B\n');placeEdgeNodes(f);const original=f.content.get(f.file.path);
+  const f=await fixture("- A\n  → B\n\n- B\n");placeEdgeNodes(f);const original=f.content.get(f.file.path);
   const event=pointerAt(450,302);f.view.onPointerDown(event);f.view.gesture.moved=true;
   f.view.onPointerUp(event);await settle(f.view);assert.equal(f.content.get(f.file.path),original);
   f.view.onPointerDown(pointerAt(450,200));f.view.onPointerUp(pointerAt(450,200));await settle(f.view);
@@ -359,7 +360,7 @@ test('dragging or clicking blank canvas never disconnects a line',async()=>{
 });
 
 test('Command Z restores disconnected lines and Command Shift Z repeats the disconnect',async()=>{
-  const original='- A\n  第一次\n- B\n  B正文\n- A\n  第二次\n',f=await fixture(original);placeEdgeNodes(f);
+  const original="- A\n  第一次\n  → B\n\n- B\n  B正文\n  → A\n\n- A\n  第二次\n",f=await fixture(original);placeEdgeNodes(f);
   const event=pointerAt(450,302);f.view.onPointerDown(event);f.view.onPointerUp(event);await settle(f.view);
   const disconnected=f.content.get(f.file.path);assert.equal(f.view.edges.length,0);
   const undo=keyEvent('z',{metaKey:true});f.view.onKeyDown(undo);await settle(f.view);
@@ -369,7 +370,7 @@ test('Command Z restores disconnected lines and Command Shift Z repeats the disc
   assert.equal(f.content.get(f.file.path),disconnected);assert.equal(f.view.edges.length,0);
 });
 test('undo restores deleted nodes and a new edit invalidates redo',async()=>{
-  const original='- A\n- B\n  正文\n',f=await fixture(original);f.view.selected=f.key('B');
+  const original="- A\n  → B\n\n- B\n  正文\n",f=await fixture(original);f.view.selected=f.key('B');
   f.view.onKeyDown(keyEvent('Backspace'));await settle(f.view);assert.ok(!f.view.nodes.some(node=>node.label==='B'));
   f.view.onKeyDown(keyEvent('z',{ctrlKey:true}));await settle(f.view);assert.equal(f.content.get(f.file.path),original);
   await f.view.beginCreate({x:0,y:0});f.view.editor.find('input')[0].value='C';f.view.editor.requestSubmit();await settle(f.view);
@@ -413,7 +414,7 @@ test('Command Z during title input is left to native text undo',async()=>{
 });
 
 test('left drag selects multiple nodes without moving the canvas or disconnecting crossed edges, and batch deletion is one undo',async()=>{
-  const original='- A\n  A正文\n- B\n  B正文\n- C\n',f=await fixture(original);placeEdgeNodes(f);
+  const original="- A\n  A正文\n  → B\n\n- B\n  B正文\n  → C\n\n- C\n",f=await fixture(original);placeEdgeNodes(f);
   f.view.onPointerDown(pointerAt(300,250));f.view.onPointerMove(pointerAt(600,350));f.view.onPointerUp(pointerAt(600,350));await settle(f.view);
   assert.deepEqual([...f.view.selectedNodes].sort(),[f.key('A'),f.key('B')].sort());
   assert.deepEqual(f.view.pan,{x:0,y:0});assert.equal(f.content.get(f.file.path),original);
@@ -422,7 +423,7 @@ test('left drag selects multiple nodes without moving the canvas or disconnectin
   assert.equal(f.content.get(f.file.path),original);assert.equal(f.view.selectedNodes.size,2);
 });
 test('left dragging a node moves it while right dragging pans without opening a menu',async()=>{
-  const f=await fixture('- A\n- B\n- C\n');placeEdgeNodes(f);const a=f.view.nodes.find(node=>node.label==='A');
+  const f=await fixture("- A\n  → B\n\n- B\n  → C\n\n- C\n");placeEdgeNodes(f);const a=f.view.nodes.find(node=>node.label==='A');
   f.view.onPointerDown(pointerAt(350,300));f.view.onPointerMove(pointerAt(600,350));f.view.onPointerUp(pointerAt(600,350));
   assert.equal(a.x,150);assert.equal(a.y,50);assert.equal(f.view.selected,f.key('A'));assert.equal(f.view.selectedNodes.size,0);
   let menus=0;f.view.showContextMenu=()=>menus++;
@@ -434,22 +435,22 @@ test('left dragging a node moves it while right dragging pans without opening a 
   f.view.onContextMenu(right(450,300));assert.equal(menus,1);
 });
 test('reverse rectangle selection and Escape work at a changed zoom and pan',async()=>{
-  const f=await fixture('- A\n- B\n- C\n');placeEdgeNodes(f);f.view.zoom=0.5;f.view.pan={x:40,y:20};
+  const f=await fixture("- A\n  → B\n\n- B\n  → C\n\n- C\n");placeEdgeNodes(f);f.view.zoom=0.5;f.view.pan={x:40,y:20};
   f.view.onPointerDown(pointerAt(530,340));f.view.onPointerMove(pointerAt(400,280));f.view.onPointerUp(pointerAt(400,280));
   assert.deepEqual([...f.view.selectedNodes].sort(),[f.key('A'),f.key('B')].sort());
   f.view.onKeyDown(keyEvent('Escape'));assert.equal(f.view.selectedNodes.size,0);
-  assert.equal(f.content.get(f.file.path),'- A\n- B\n- C\n');
+  assert.equal(f.content.get(f.file.path),"- A\n  → B\n\n- B\n  → C\n\n- C\n");
 });
 test('batch removal of references preserves source Markdown',async()=>{
-  const f=await fixture('- A\n- [[来源.md|共享]]\n- C\n');f.addFile('来源.md','- 共享\n  来源正文\n');await f.view.refresh();
+  const f=await fixture("- A\n  → [[来源.md|共享]]\n\n- [[来源.md|共享]]\n  → C\n\n- C\n");f.addFile('来源.md','- 共享\n  来源正文\n');await f.view.refresh();
   f.view.selectedNodes=new Set([f.key('A'),nodeKey('来源.md',titleID('共享'))]);
   f.view.onKeyDown(keyEvent('Backspace'));await settle(f.view);
   assert.deepEqual(f.view.nodes.map(node=>node.label),['C']);assert.equal(f.content.get('来源.md'),'- 共享\n  来源正文\n');
   f.view.onKeyDown(keyEvent('z',{metaKey:true}));await settle(f.view);
-  assert.equal(f.content.get(f.file.path),'- A\n- [[来源.md|共享]]\n- C\n');
+  assert.equal(f.content.get(f.file.path),"- A\n  → [[来源.md|共享]]\n\n- [[来源.md|共享]]\n  → C\n\n- C\n");
 });
 test('directed edges render moving dashes with separate reverse lanes and reset dash state',async()=>{
-  const f=await fixture('- A\n- B\n- A\n');placeEdgeNodes(f);
+  const f=await fixture("- A\n  → B\n\n- B\n  → A\n\n- A\n");placeEdgeNodes(f);
   const oldWindow=globalThis.window,oldStyle=globalThis.getComputedStyle,oldPerformance=globalThis.performance;
   let time=1000,dash=[],start,end;const strokes=[];
   const ctx=new Proxy({setLineDash(value){dash=[...value];},moveTo(x,y){start={x,y};},lineTo(x,y){end={x,y};},stroke(){if(dash[0]===8)strokes.push({start,end,offset:this.lineDashOffset,dash:[...dash]});},measureText(text){return {width:text.length*8};}}, {get(target,key){return key in target?target[key]:()=>{};}});
@@ -509,9 +510,9 @@ test('wheel input leaves the camera unchanged during inline editing',async()=>{
 });
 
 async function sharedFixture(){
-  const f=await fixture('- A\n- B\n- C\n','Thoughts/A.md');
+  const f=await fixture("- A\n  → B\n\n- B\n  → C\n\n- C\n",'Thoughts/A.md');
   f.plugin.layout.settings.noteFolder='Thoughts';
-  f.addFile('Thoughts/sub/B.md','- [[Thoughts/A.md|B]]\n- D\n\n---\n\n- [[Thoughts/A.md|C]]\n- [[Thoughts/A.md|A]]\n');
+  f.addFile('Thoughts/sub/B.md',"- [[Thoughts/A.md|B]]\n  → D\n\n- D\n\n\n- [[Thoughts/A.md|C]]\n  → [[Thoughts/A.md|A]]\n\n- [[Thoughts/A.md|A]]\n");
   f.addFile('Outside.md','- Outside\n');f.addFile('ThoughtsOther/ignored.md','- Ignored\n');
   f.view.resize=()=>{};f.view.refresh=BrainOSGraphView.prototype.refresh.bind(f.view);
   await f.view.refresh();return f;
@@ -564,7 +565,7 @@ test('background links cannot be disconnected from a different active thought',a
 });
 
 test('active thought uses normal foreground; selection, edge hover and preview use the live theme accent',async()=>{
-  const {view}=await fixture('- A\n- B\n');
+  const {view}=await fixture("- A\n  → B\n\n- B\n");
   view.nodes.forEach((node,index)=>{node.x=index*160-80;node.y=0;});
   view.search={value:''};view.status={setText(){}};view.contentEl.querySelector=()=>null;
   const paints=[],ctx={setTransform(){},clearRect(){},beginPath(){},arc(){},moveTo(){},lineTo(){},closePath(){},setLineDash(){},
