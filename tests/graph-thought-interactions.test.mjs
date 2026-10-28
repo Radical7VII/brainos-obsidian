@@ -480,10 +480,13 @@ test('Mac precise two-finger scroll pans in screen pixels and cancels pending pi
   assert.equal(event.prevented,true);assert.deepEqual(view.pan,{x:-2,y:11});assert.equal(view.zoom,2);
   assert.equal(view.targetZoom,undefined);assert.equal(view.cameraFrame,undefined);
   view.onWheel(wheelEvent({deltaX:-8,deltaY:0,wheelDeltaY:0}));assert.deepEqual(view.pan,{x:2,y:11});
+  view.onWheel(wheelEvent({deltaY:2.5}));assert.deepEqual(view.pan,{x:2,y:9.75});
 });
 test('Mac pinch keeps cursor-anchored zoom while mouse wheels and other platforms retain zoom',async()=>{
   for(const [platform,input] of [
     ['MacIntel',{ctrlKey:true,deltaY:-8,wheelDeltaY:24}],
+    ['MacIntel',{deltaY:40,wheelDeltaY:-120}],
+    ['MacIntel',{deltaY:-80,wheelDeltaY:240}],
     ['MacIntel',{deltaY:100,wheelDeltaY:-120}],
     ['MacIntel',{deltaMode:1,deltaY:3,wheelDeltaY:-120}],
     ['Win32',{deltaY:18,wheelDeltaY:-54}],

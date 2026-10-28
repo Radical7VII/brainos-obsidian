@@ -50,7 +50,8 @@ Run **新建思考** (New thought) from the command palette or the new-tab page.
 | Select several nodes | Drag empty canvas space |
 | Delete selected nodes | Backspace/Delete |
 | Disconnect an edge | Hover to highlight, then click |
-| Pan the canvas | Right-button drag, or two-finger trackpad scrolling |
+| Zoom the canvas | Mouse wheel or trackpad pinch, anchored at the cursor |
+| Pan the canvas | Right-button drag; Mac two-finger trackpad scrolling (enabled by default) |
 | Undo / redo | Command/Ctrl+Z / Command/Ctrl+Shift+Z |
 
 Type a node title to see matching nodes from the thought folder. Choose an existing node to reuse it or reference one from another file. Edit body text in the Markdown view. Flowing dashed edges indicate direction. Selecting a node temporarily expands the active thought into a reading layout; click empty space or press Escape to return to the free layout.

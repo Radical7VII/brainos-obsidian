@@ -2083,6 +2083,8 @@ function isMacTrackpadPan(event, platform) {
   if (!/Mac/i.test(platform) || event.ctrlKey || event.deltaMode !== 0) return false;
   if (event.deltaY === 0) return event.deltaX !== 0;
   if (typeof event.wheelDeltaY === "number") {
+    const wheelDelta = Math.abs(event.wheelDeltaY);
+    if (wheelDelta > 0 && Math.abs(wheelDelta / 120 - Math.round(wheelDelta / 120)) < 1e-4) return false;
     return Math.abs(event.wheelDeltaY + event.deltaY * 3) < 0.01;
   }
   return !Number.isInteger(event.deltaY) || !Number.isInteger(event.deltaX);
