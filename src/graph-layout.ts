@@ -1,3 +1,4 @@
+import { LayoutClock } from "./layout-clock";
 import type { LayoutCommand, LayoutResult } from "./layout-protocol";
 import workerSource from "./layout-worker.ts?worker";
 import { ForceLayout, ForceOptions } from "./force-layout";
@@ -18,6 +19,7 @@ export class GraphLayout {
   private pinned = new Map<string, Point>();
   private disposed = false;
   private local = false;
+  private clock = new LayoutClock();
 
   constructor(private readonly invalidate: () => void) {
     try {
@@ -66,8 +68,12 @@ export class GraphLayout {
   unpin(path: string) { this.pinned.delete(path); this.fallback?.unpin(path); this.send({ type: "unpin", path }); }
   reheat(alpha = 0.3) { this.fallback?.reheat(alpha); this.running = true; this.send({ type: "reheat", alpha }); }
   reset() { this.positions = {}; this.fallback?.reset(); this.send({ type: "reset" }); }
-  tick(nodes: readonly GraphNode[]) {
-    if (this.fallback) return this.fallback.tick(nodes);
+  tick(nodes: readonly GraphNode[], time = performance.now()) {
+    if (this.fallback) {
+      for (let steps = this.clock.advance(time); steps > 0; steps--) this.fallback.tick(nodes);
+      if (!this.fallback.isRunning) this.clock.reset();
+      return this.fallback.isRunning;
+    }
     for (const node of nodes) { const point = this.pinned.get(node.path) ?? this.positions[node.path]; if (point) Object.assign(node, point); }
     return this.running;
   }

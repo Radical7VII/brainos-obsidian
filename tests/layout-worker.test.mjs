@@ -8,7 +8,7 @@ test('layout worker handles sync and pin messages using worker-local timers',()=
   const messages=[],timers=[];
   const self={postMessage:message=>messages.push(message),setTimeout:(callback,delay)=>{timers.push({callback,delay});return timers.length;}};
   // No window or global setTimeout is supplied: workers have their own event loop.
-  vm.runInNewContext(bundle.outputFiles[0].text,{self});
+  vm.runInNewContext(bundle.outputFiles[0].text,{self,performance:{now:()=>0}});
   const node={path:'a',label:'A',openPath:'a.md',degree:0,thoughts:[],x:30,y:20};
   self.onmessage({data:{type:'sync',revision:8,commandVersion:1,nodes:[node],edges:[],saved:{},local:false}});
   assert.equal(messages.at(-1).revision,8);assert.equal(messages.at(-1).commandVersion,1);

@@ -618,7 +618,7 @@ test('animated reading positions drive hit testing; dragging follows the pointer
   assert.deepEqual({x:b.x,y:b.y},{x:displayed.x+70,y:displayed.y+40});
   assert.equal(f.view.readingRequested,false);
   for(const key of [f.key('A'),f.key('C')])assert.deepEqual(f.view.readingPositions[key],before[key]);
-  assert.ok(f.calls.every(Boolean));
+  assert.ok(f.calls.every(local => local === false));
 });
 test('sidebar preview never recalculates reading geometry or reheats the shared layout',async()=>{
   const f=await readingFixture(),before=structuredClone(f.view.readingPositions),base=f.view.nodes.map(node=>({path:node.path,x:node.x,y:node.y})),calls=f.calls.length;
@@ -635,7 +635,7 @@ test('continuing a thought grows to the right while preserving old reading posit
   for(const key of Object.keys(before))assert.deepEqual(f.view.readingPositions[key],before[key]);
   assert.ok(f.view.readingPositions[f.key('Next')].x>before[f.key('C')].x);
   const after=f.view.nodes.find(node=>node.label==='D');assert.deepEqual({x:after.x,y:after.y},background);
-  assert.ok(f.calls.every(Boolean));
+  assert.ok(f.calls.every(local => local === false));
 });
 
 test('screen-space title avoidance keeps preview geometry unchanged even in a crowded graph',async()=>{
@@ -660,11 +660,11 @@ test('screen-space title avoidance keeps preview geometry unchanged even in a cr
   }finally{globalThis.window=oldWindow;globalThis.getComputedStyle=oldStyle;}
 });
 
-test('node click requests reading, while a blank click, Escape and file changes restore freedom',async()=>{
+test('node click keeps global forces; reading layout requires an explicit request',async()=>{
   const f=await readingFixture();f.view.setReadingMode(false);
   const b=f.view.nodes.find(node=>node.label==='B'),p=f.view.worldToScreen(b);
   f.view.onPointerDown(pointerAt(p.x,p.y));assert.equal(f.view.readingRequested,false);
-  f.view.onPointerUp(pointerAt(p.x,p.y));assert.equal(f.view.readingRequested,true);
+  f.view.onPointerUp(pointerAt(p.x,p.y));assert.equal(f.view.readingRequested,false);
   f.view.onPointerDown(pointerAt(10,10));f.view.onPointerUp(pointerAt(10,10));assert.equal(f.view.readingRequested,false);
   f.view.setReadingMode(true);f.view.onKeyDown({key:'Escape',preventDefault(){}});assert.equal(f.view.readingRequested,false);
   f.view.setReadingMode(true);await f.view.onLoadFile(f.app.vault.getAbstractFileByPath('Thoughts/sub/B.md'));
@@ -679,4 +679,15 @@ test('zoom animation uses the graph window rather than the main-window scheduler
   assert.equal(view.cameraFrame,731);assert.equal(frames.length,1);
   // A second request must not schedule another frame while this window owns one.
   view.animateZoom();assert.equal(frames.length,1);
+});
+
+
+test('editing pins only the edited node and releases it on cancel without auto reading',async()=>{
+  const f=await fixture('- A\n  → B\n\n- B\n'),a=f.view.nodes.find(n=>n.label==='A'),calls=[];
+  f.view.forceLayout.pin=(path,point)=>calls.push(['pin',path,point]);
+  f.view.forceLayout.unpin=path=>calls.push(['unpin',path]);
+  await f.view.beginEdit(a);
+  assert.equal(f.view.readingRequested,false);
+  assert.equal(calls[0][0],'pin');assert.equal(calls[0][1],a.path);
+  f.view.cancelNodeEditing();assert.deepEqual(calls.at(-1),['unpin',a.path]);
 });

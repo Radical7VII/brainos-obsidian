@@ -287,7 +287,7 @@ export class BrainOSGraphView extends FileView {
     }
     if (this.selected && !this.nodes.some(node => node.path === this.selected)) this.selected = undefined;
     if (this.hovered && !this.nodes.some(node => node.path === this.hovered)) this.hovered = undefined;
-    this.forceLayout.sync(this.nodes, this.edges, this.plugin.layout.positions, this.source === "thoughts");
+    this.forceLayout.sync(this.nodes, this.edges, this.plugin.layout.positions, false);
     this.updateReadingLayout();
     this.forceLayout.setSelected(this.selected);
     this.startLayoutAnimation();
@@ -455,7 +455,7 @@ export class BrainOSGraphView extends FileView {
     this.animationFrame = this.contentEl.win.requestAnimationFrame(time => {
       this.animationFrame = undefined;
       if (this.closed) return;
-      this.forceLayout.tick(this.nodes);
+      this.forceLayout.tick(this.nodes, time);
       const gesture = this.gesture;
       const reducedMotion = this.canvas?.ownerDocument?.defaultView?.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
       const moving = this.readingTransition.step(this.nodes, this.readingPositions, this.readingRequested, this.zoom, time,
@@ -536,7 +536,6 @@ export class BrainOSGraphView extends FileView {
     const node = this.nodes.find(item => item.ownerPath === file.path) ?? this.nodes.find(item => item.openPath === file.path);
     if (!node) { new Notice("当前文件未出现在所选思考图谱中"); return; }
     const point = this.displayPoint(node);
-    this.setReadingMode(true, node);
     this.selectedNodes.clear(); this.selected = node.path; this.hovered = node.path; this.forceLayout.setSelected(this.selected); this.pan = { x: -point.x, y: -point.y }; this.scheduleLayoutSave(); this.startLayoutAnimation(); this.draw(); this.canvas.focus();
   }
 
@@ -861,7 +860,6 @@ export class BrainOSGraphView extends FileView {
       return;
     }
     if (!gesture.moved) {
-      if (gesture.kind === "node" && gesture.node.thoughts.includes(this.thoughtPath)) this.setReadingMode(true, gesture.node);
       if (gesture.kind === "box") {
         this.setReadingMode(false);
         const edge = gesture.edge;
@@ -1056,7 +1054,6 @@ export class BrainOSGraphView extends FileView {
     if (this.source === "vault" || !target) { new Notice("请先打开一个思考文件，或运行「新建思考」命令"); return; }
     this.closeEditor();
     this.selectedNodes.clear();
-    this.setReadingMode(true, this.nodes.find(node => node.path === parent));
     const draft: GraphNode = { path: `draft:${crypto.randomUUID()}`, label: "", openPath: "", degree: parent ? 1 : 0, thoughts: target ? [target] : [], kind: "note", ...point };
     this.draftNode = draft; this.draftParent = parent; this.draftChild = insertion?.child;
     this.filterSnapshot();
@@ -1149,7 +1146,7 @@ export class BrainOSGraphView extends FileView {
       if (this.closed) return;
       this.closeEditor();
       this.selectedNodes.clear(); this.editingNode = node; this.selected = node.path; this.hovered = node.path;
-      if (node.thoughts.includes(this.thoughtPath)) this.setReadingMode(true, node);
+      this.forceLayout.pin(node.path, { x: node.x, y: node.y });
       this.forceLayout.setSelected(node.path);
       const form = this.contentEl.createEl("form", { cls: "brainos-node-title-editor" }); this.editor = form;
       const title = form.createEl("input", { cls: "brainos-node-title-input", attr: { "aria-label": "节点标题", autocomplete: "off" } });
@@ -1232,6 +1229,7 @@ export class BrainOSGraphView extends FileView {
   private closeEditor() {
     this.clearEdgeHover();
     this.titleSuggest?.dispose(); this.titleSuggest = undefined;
+    if (this.editingNode) this.forceLayout.unpin(this.editingNode.path);
     this.editingNode = undefined;
     this.editor?.remove(); this.editor = undefined;
     if (this.draftNode) {

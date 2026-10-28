@@ -67,15 +67,42 @@ test('spatial hash handles negative coordinates, replacements and removal',()=>{
 });
 test('shared graph edits move nearby nodes, preserve distant nodes, and retain motion after release',()=>{
   const layout=new GraphLayout(()=>{}),nodes=[node('A',500,200),node('Far',-3000,700)];
+  let time=0;const tick=()=>layout.tick(nodes,time+=1000/60);
   try{
     layout.sync(nodes,[],{},true);const before=layout.snapshot();assert.equal(layout.isRunning,false);
     nodes.push(node('B',NaN,NaN));layout.sync(nodes,[{from:'A',to:'B',thoughts:['T']}],{},true);
-    for(let i=0;i<50;i++)layout.tick(nodes);
+    for(let i=0;i<50;i++)tick();
     assert.notDeepEqual(layout.snapshot().A,before.A);assert.deepEqual(layout.snapshot().Far,before.Far);
-    layout.pin('A',before.A);layout.movePinned('A',{x:650,y:220});layout.tick(nodes);
+    layout.pin('A',before.A);layout.movePinned('A',{x:650,y:220});tick();
     assert.deepEqual(layout.snapshot().A,{x:650,y:220});layout.unpin('A');
-    for(let i=0;i<60;i++)layout.tick(nodes);
+    for(let i=0;i<60;i++)tick();
     assert.notDeepEqual(layout.snapshot().A,{x:650,y:220});assert.deepEqual(layout.snapshot().Far,before.Far);
-    layout.sync(nodes,[],{},false);assert.equal(layout.isRunning,true);layout.tick(nodes);assert.notDeepEqual(layout.snapshot().Far,before.Far);
+    layout.sync(nodes,[],{},false);assert.equal(layout.isRunning,true);tick();assert.notDeepEqual(layout.snapshot().Far,before.Far);
+  }finally{layout.dispose();}
+});
+
+
+test('global physics has equal trajectories at 60 Hz and 120 Hz, then cools',()=>{
+  const simulate=hz=>{
+    const layout=new GraphLayout(()=>{}),nodes=[node('A',-500,200),node('B',500,-200),node('Far',1800,900)];
+    try{
+      layout.sync(nodes,[{from:'A',to:'B',thoughts:['T']}],{},false);
+      for(let frame=0;frame<=hz;frame++)layout.tick(nodes,frame*1000/hz);
+      const afterSecond=layout.snapshot();
+      assert.notDeepEqual(afterSecond.Far,{x:1800,y:900});
+      for(let frame=hz+1;frame<=hz*6;frame++)layout.tick(nodes,frame*1000/hz);
+      assert.equal(layout.isRunning,false);
+      return afterSecond;
+    }finally{layout.dispose();}
+  };
+  assert.deepEqual(simulate(60),simulate(120));
+});
+
+test('resuming after a long pause limits physics catch-up',()=>{
+  const layout=new GraphLayout(()=>{}),nodes=[node('A',500,200)];
+  try{
+    layout.sync(nodes,[],{},false);layout.tick(nodes,0);layout.tick(nodes,60000);
+    assert.equal(layout.isRunning,true,'does not fast-forward the entire cooling period');
+    assert.ok(Number.isFinite(nodes[0].x));
   }finally{layout.dispose();}
 });

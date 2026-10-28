@@ -1,8 +1,10 @@
+import { LayoutClock } from "./layout-clock";
 import { ForceLayout } from "./force-layout";
 import type { GraphNode } from "./thoughts";
 import type { LayoutRequest, LayoutResult } from "./layout-protocol";
 
 const layout = new ForceLayout();
+const clock = new LayoutClock();
 let nodes: GraphNode[] = [];
 let revision = 0;
 let commandVersion = 0;
@@ -18,9 +20,10 @@ function publish() {
 }
 function run() {
   timer = undefined;
-  layout.tick(nodes);
+  for (let steps = clock.advance(performance.now()); steps > 0; steps--) layout.tick(nodes);
   publish();
   if (layout.isRunning) timer = self.setTimeout(run, 1000 / 60);
+  else clock.reset();
 }
 function start() { if (timer === undefined) timer = self.setTimeout(run, 0); }
 
