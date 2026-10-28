@@ -1,15 +1,17 @@
 import { App, Component, MarkdownRenderer, Menu, Notice, TFile } from "obsidian";
 import {
   DocumentOccurrence, NodeEditSnapshot, ThoughtDocument, appendDocumentContinuation, appendDocumentStep, nodeRevision,
-  nodeKey, occurrenceTitle, parseThoughtDocument, removeDocumentNode,
+  nodeKey, occurrenceTitle, parseThoughtDocument, removeDocumentNode, wikiLink,
 } from "./thought-document";
 import { buildThoughtLanes, navigateThoughtLanes, projectThoughtNodes } from "./thought-lanes";
 import { graphHistory, processGraphFile } from "./graph-history";
-import { editThoughtNode, loadThoughtDocument } from "./thought-store";
+import { editThoughtNode, loadThoughtDocument, readThoughtNode } from "./thought-store";
+import { NodeTitleCandidate, NodeTitleSuggest } from "./node-title-suggest";
+import type { GraphNode } from "./thoughts";
 
 type LaneDraft = { visit?: DocumentOccurrence; parent?: DocumentOccurrence; branch: boolean; value: string;
-  expected?: NodeEditSnapshot; index: number; previousSelection: number };
-type Actions = { raw: (line: number) => void; changed: () => void };
+  expected?: NodeEditSnapshot; index: number; previousSelection: number; candidate?: NodeTitleCandidate };
+type Actions = { raw: (line: number) => void; changed: () => void; loadNodes: () => Promise<GraphNode[]> };
 
 /** Scrollable reading surface. SVG owns only tracks; native DOM owns all text and editing. */
 export class ThoughtLaneView extends Component {
@@ -23,6 +25,7 @@ export class ThoughtLaneView extends Component {
   private frame?: number;
   private busy = false;
   private draft?: LaneDraft;
+  private titleSuggest?: NodeTitleSuggest;
   private scrollByFile = new Map<string, { top: number; selected: number }>();
   constructor(private app: App, readonly container: HTMLElement, private actions: Actions) { super(); }
 
@@ -90,6 +93,7 @@ export class ThoughtLaneView extends Component {
     doc = projection.doc;
     const selectedRow = projection.sourceIndices.indexOf(this.selected);
     const revision = ++this.revision;
+    this.titleSuggest?.dispose(); this.titleSuggest = undefined;
     this.observer?.disconnect();
     if (this.bodyComponent) this.removeChild(this.bodyComponent);
     const component = this.addChild(new Component()); this.bodyComponent = component;
@@ -225,6 +229,7 @@ export class ThoughtLaneView extends Component {
     void this.render().then(() => {
       const input = this.container.querySelector<HTMLInputElement>(".brainos-lanes-title-input");
       input?.focus(); input?.select(); input?.scrollIntoView({ block: "nearest" });
+      input?.dispatchEvent(new Event("input", { bubbles: true }));
     }).catch(error => { this.draft = undefined; new Notice(error instanceof Error ? error.message : String(error)); });
   }
 
@@ -235,8 +240,17 @@ export class ThoughtLaneView extends Component {
     let composing = false;
     input.addEventListener("compositionstart", () => { composing = true; });
     input.addEventListener("compositionend", () => { composing = false; draft.value = input.value; });
-    input.oninput = () => { draft.value = input.value; };
+    this.titleSuggest = new NodeTitleSuggest(this.app, input, this.file!.path,
+      async () => (await this.actions.loadNodes()).filter(node => node.kind !== "unresolved"),
+      candidate => {
+        if (this.draft !== draft || this.busy) return;
+        draft.candidate = candidate; draft.value = candidate.node.label;
+        void this.saveDraft(false);
+      }, () => composing, false, draft.visit ? nodeKey(this.file!.path, draft.visit.id) : undefined);
+    input.oninput = () => { draft.value = input.value; draft.candidate = undefined; };
     input.onkeydown = event => {
+      if (event.defaultPrevented) return;
+      if (this.titleSuggest?.isShowing && ["ArrowUp", "ArrowDown", "Enter", "Escape"].includes(event.key)) return;
       event.stopPropagation();
       if (composing || event.isComposing || event.keyCode === 229 || event.repeat) return;
       if (event.key === "Escape") {
@@ -253,17 +267,20 @@ export class ThoughtLaneView extends Component {
   private async saveDraft(continueEditing: boolean) {
     const draft = this.draft, file = this.file;
     if (!draft || !file || this.busy) return;
+    const candidate = draft.candidate;
     const input = this.container.querySelector<HTMLInputElement>(".brainos-lanes-title-input");
     this.busy = true; if (input) input.disabled = true;
     let saved = false;
     try {
       await graphHistory(this.app).record(async () => {
-        if (draft.visit) await editThoughtNode(this.app, nodeKey(file.path, draft.visit.id), draft.value, undefined, draft.expected);
+        if (candidate) await readThoughtNode(this.app, candidate.node.path);
+        if (draft.visit) await editThoughtNode(this.app, nodeKey(file.path, draft.visit.id), draft.value, undefined, draft.expected, candidate?.kind === "reuse");
         else await processGraphFile(this.app, file, text => {
           if (draft.parent && !parseThoughtDocument(text).nodes.some(n => n.id === draft.parent!.id)) throw new Error("起点已不存在，请刷新后重试");
           const from = draft.parent && occurrenceTitle(draft.parent);
-          const next = draft.branch && from ? appendDocumentStep(appendDocumentStep(text, from, "", true), draft.value)
-            : appendDocumentContinuation(text, from, draft.value);
+          const title = candidate?.kind === "reference" ? wikiLink(candidate.node.ownerPath!, candidate.node.label) : draft.value;
+          const next = draft.branch && from ? appendDocumentStep(appendDocumentStep(text, from, "", true), title)
+            : appendDocumentContinuation(text, from, title);
           this.selected = parseThoughtDocument(next).occurrences.length - 1;
           return next;
         });
@@ -307,5 +324,5 @@ export class ThoughtLaneView extends Component {
     finally { this.busy = false; }
   }
 
-  onunload() { this.revision++; this.observer?.disconnect(); if (this.frame !== undefined) this.container.win.cancelAnimationFrame(this.frame); }
+  onunload() { this.revision++; this.titleSuggest?.dispose(); this.observer?.disconnect(); if (this.frame !== undefined) this.container.win.cancelAnimationFrame(this.frame); }
 }

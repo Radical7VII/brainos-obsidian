@@ -2508,6 +2508,7 @@ var ThoughtLaneView = class extends import_obsidian6.Component {
     __publicField(this, "frame");
     __publicField(this, "busy", false);
     __publicField(this, "draft");
+    __publicField(this, "titleSuggest");
     __publicField(this, "scrollByFile", /* @__PURE__ */ new Map());
   }
   onload() {
@@ -2568,7 +2569,7 @@ var ThoughtLaneView = class extends import_obsidian6.Component {
     ((_a = this.container.querySelector(`[data-visit="${Math.max(0, this.selected)}"]`)) != null ? _a : this.container).focus({ preventScroll: true });
   }
   async render() {
-    var _a, _b, _c, _d;
+    var _a, _b, _c, _d, _e;
     let doc = this.doc;
     const file = this.file, draft = this.draft;
     if (!doc || !file) return;
@@ -2585,7 +2586,9 @@ var ThoughtLaneView = class extends import_obsidian6.Component {
     doc = projection.doc;
     const selectedRow = projection.sourceIndices.indexOf(this.selected);
     const revision = ++this.revision;
-    (_a = this.observer) == null ? void 0 : _a.disconnect();
+    (_a = this.titleSuggest) == null ? void 0 : _a.dispose();
+    this.titleSuggest = void 0;
+    (_b = this.observer) == null ? void 0 : _b.disconnect();
     if (this.bodyComponent) this.removeChild(this.bodyComponent);
     const component = this.addChild(new import_obsidian6.Component());
     this.bodyComponent = component;
@@ -2702,7 +2705,7 @@ var ThoughtLaneView = class extends import_obsidian6.Component {
       for (const target of layout.rows[rowIndex].missing) meta.createSpan({ text: "\u2192 " + target + "\uFF08\u5C1A\u65E0\u672C\u5730\u8BB0\u5F55\uFF09" });
       if (this.selected !== index) continue;
       const details = row.createDiv({ cls: "brainos-lanes-details" });
-      const records = (_d = (_c = (_b = this.doc) == null ? void 0 : _b.nodes.find((node) => node.id === visit.id)) == null ? void 0 : _c.occurrences) != null ? _d : [visit];
+      const records = (_e = (_d = (_c = this.doc) == null ? void 0 : _c.nodes.find((node) => node.id === visit.id)) == null ? void 0 : _d.occurrences) != null ? _e : [visit];
       for (const record of records.filter((record2) => record2.body)) {
         const body = details.createDiv({ cls: "brainos-lanes-body" });
         if (records.filter((record2) => record2.body).length > 1) body.createDiv({ cls: "brainos-lanes-caption", text: `\u8BB0\u5F55 ${record.ordinal + 1}` });
@@ -2765,6 +2768,7 @@ var ThoughtLaneView = class extends import_obsidian6.Component {
       input == null ? void 0 : input.focus();
       input == null ? void 0 : input.select();
       input == null ? void 0 : input.scrollIntoView({ block: "nearest" });
+      input == null ? void 0 : input.dispatchEvent(new Event("input", { bubbles: true }));
     }).catch((error) => {
       this.draft = void 0;
       new import_obsidian6.Notice(error instanceof Error ? error.message : String(error));
@@ -2786,10 +2790,29 @@ var ThoughtLaneView = class extends import_obsidian6.Component {
       composing = false;
       draft.value = input.value;
     });
+    this.titleSuggest = new NodeTitleSuggest(
+      this.app,
+      input,
+      this.file.path,
+      async () => (await this.actions.loadNodes()).filter((node) => node.kind !== "unresolved"),
+      (candidate) => {
+        if (this.draft !== draft || this.busy) return;
+        draft.candidate = candidate;
+        draft.value = candidate.node.label;
+        void this.saveDraft(false);
+      },
+      () => composing,
+      false,
+      draft.visit ? nodeKey(this.file.path, draft.visit.id) : void 0
+    );
     input.oninput = () => {
       draft.value = input.value;
+      draft.candidate = void 0;
     };
     input.onkeydown = (event) => {
+      var _a;
+      if (event.defaultPrevented) return;
+      if (((_a = this.titleSuggest) == null ? void 0 : _a.isShowing) && ["ArrowUp", "ArrowDown", "Enter", "Escape"].includes(event.key)) return;
       event.stopPropagation();
       if (composing || event.isComposing || event.keyCode === 229 || event.repeat) return;
       if (event.key === "Escape") {
@@ -2809,17 +2832,20 @@ var ThoughtLaneView = class extends import_obsidian6.Component {
     var _a, _b;
     const draft = this.draft, file = this.file;
     if (!draft || !file || this.busy) return;
+    const candidate = draft.candidate;
     const input = this.container.querySelector(".brainos-lanes-title-input");
     this.busy = true;
     if (input) input.disabled = true;
     let saved = false;
     try {
       await graphHistory(this.app).record(async () => {
-        if (draft.visit) await editThoughtNode(this.app, nodeKey(file.path, draft.visit.id), draft.value, void 0, draft.expected);
+        if (candidate) await readThoughtNode(this.app, candidate.node.path);
+        if (draft.visit) await editThoughtNode(this.app, nodeKey(file.path, draft.visit.id), draft.value, void 0, draft.expected, (candidate == null ? void 0 : candidate.kind) === "reuse");
         else await processGraphFile(this.app, file, (text) => {
           if (draft.parent && !parseThoughtDocument(text).nodes.some((n) => n.id === draft.parent.id)) throw new Error("\u8D77\u70B9\u5DF2\u4E0D\u5B58\u5728\uFF0C\u8BF7\u5237\u65B0\u540E\u91CD\u8BD5");
           const from = draft.parent && occurrenceTitle(draft.parent);
-          const next = draft.branch && from ? appendDocumentStep(appendDocumentStep(text, from, "", true), draft.value) : appendDocumentContinuation(text, from, draft.value);
+          const title = (candidate == null ? void 0 : candidate.kind) === "reference" ? wikiLink(candidate.node.ownerPath, candidate.node.label) : draft.value;
+          const next = draft.branch && from ? appendDocumentStep(appendDocumentStep(text, from, "", true), title) : appendDocumentContinuation(text, from, title);
           this.selected = parseThoughtDocument(next).occurrences.length - 1;
           return next;
         });
@@ -2877,9 +2903,10 @@ var ThoughtLaneView = class extends import_obsidian6.Component {
     }
   }
   onunload() {
-    var _a;
+    var _a, _b;
     this.revision++;
-    (_a = this.observer) == null ? void 0 : _a.disconnect();
+    (_a = this.titleSuggest) == null ? void 0 : _a.dispose();
+    (_b = this.observer) == null ? void 0 : _b.disconnect();
     if (this.frame !== void 0) this.container.win.cancelAnimationFrame(this.frame);
   }
 };
@@ -3080,7 +3107,8 @@ var BrainOSGraphView = class extends import_obsidian7.FileView {
           }
         });
       },
-      changed: () => this.plugin.refreshViews()
+      changed: () => this.plugin.refreshViews(),
+      loadNodes: async () => (await buildThoughtSnapshot(this.app, void 0, this.plugin.layout.settings.noteFolder)).nodes
     }));
     const edit = this.addAction("pencil", "\u5207\u6362\u5230\u7F16\u8F91\u89C6\u56FE", () => {
       if (this.file) void this.plugin.openMarkdownView(this.leaf, this.file);

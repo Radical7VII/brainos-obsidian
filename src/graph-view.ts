@@ -160,6 +160,7 @@ export class BrainOSGraphView extends FileView {
         });
       },
       changed: () => this.plugin.refreshViews(),
+      loadNodes: async () => (await buildSnapshot(this.app, undefined, this.plugin.layout.settings.noteFolder)).nodes,
     }));
     const edit = this.addAction("pencil", "切换到编辑视图", () => {
       if (this.file) void this.plugin.openMarkdownView(this.leaf, this.file);

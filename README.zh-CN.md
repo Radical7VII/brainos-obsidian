@@ -57,6 +57,8 @@ All note processing stays local. No account, telemetry, or network service is re
 - `Backspace` / `Delete` 删除选中节点及它的全部记录，随后选择邻近一行；标题输入期间只删除文字。
 - `⌘/Ctrl Z` 撤销，`⌘/Ctrl Shift Z` 重做。
 
+原位新建和改名均使用原生节点联想列表，候选显示名称与来源文件。新建可复用当前文件节点或引用其他文件节点；编辑可选择当前文件的其他节点合并，并保留各次正文。候选列表展开时，上下键选择候选、Enter 确认候选。
+
 名称输入期间，`Enter` 确认，`Tab` 确认并继续延伸，`Esc` 取消；草稿不落盘，中文输入法选词不会提前提交。不弹出新建或编辑 Modal。
 
 ## 文件格式
